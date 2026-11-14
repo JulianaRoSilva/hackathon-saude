@@ -1,0 +1,13 @@
+/* CSS intencionalmente básico para os alunos alterarem */
+body { font-family: Arial, sans-serif; margin: 0; background: #f4f4f4; color: #222; }
+header { background: #167a73; color: white; padding: 16px; }
+main { max-width: 750px; margin: 20px auto; padding: 15px; background: white; }
+h1 { margin: 0; }
+section { margin-bottom: 24px; }
+form { margin-bottom: 20px; }
+label { display: block; margin: 10px 0; }
+input, select { display: block; box-sizing: border-box; padding: 7px; width: 100%; margin-top: 4px; }
+button { padding: 8px 12px; background: #167a73; color: white; border: 0; cursor: pointer; margin: 5px 0; }
+.item { border: 1px solid #ccc; padding: 10px; margin: 10px 0; }
+#mensagem { font-weight: bold; }
+[hidden] { display: none !important; }

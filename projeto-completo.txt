@@ -1,0 +1,2767 @@
+
+================================================================================
+ARQUIVO: package.json
+================================================================================
+
+{
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "dotenv": "^18.0.10",
+    "express": "^5.3.0",
+    "pg": "^8.23.1",
+    "reflect-metadata": "^0.2.2",
+    "typeorm": "^1.1.3"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "ts-node-dev": "^2.0.0",
+    "typescript": "^5.9.3"
+  }
+}
+
+
+
+================================================================================
+ARQUIVO: public\index.html
+================================================================================
+
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SaúdeNaMão</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="script.js" defer></script>
+</head>
+<body>
+  <header><h1>SaúdeNaMão</h1><p>Portal simples para consultar informações de saúde</p></header>
+  <main>
+    <p id="mensagem" role="status"></p>
+    <section id="acesso">
+      <h2>Entrar</h2>
+      <form id="formLogin">
+        <label>Login (até 11 caracteres) <input name="login" maxlength="11" required></label>
+        <label>Senha <input name="senha" type="password" required></label>
+        <button>Entrar</button>
+      </form>
+      <h2>Criar conta</h2>
+      <form id="formCadastro">
+        <label>Login <input name="login" maxlength="11" required></label>
+        <label>Senha <input name="senha" type="password" required></label>
+        <button>Cadastrar</button>
+      </form>
+    </section>
+    <section id="portal" hidden>
+      <p>Conectado como <strong id="nomeUsuario"></strong> (código <span id="codigoUsuario"></span>) <button id="sair" type="button">Sair</button></p>
+      <h2>Meus agendamentos</h2>
+      <button id="atualizar" type="button">Atualizar informações</button>
+      <div id="agendamentos"></div>
+      <h2>Minha lista de espera</h2>
+      <div id="espera"></div>
+      <hr>
+      <h2>Cadastros de teste da API</h2>
+      <p>Esses cadastros são apenas para demonstração. A API atual não separa permissões administrativas.</p>
+      <h3>Procedimento</h3>
+      <form id="formProcedimento">
+        <label>Descrição <input name="descricao" required></label>
+        <button>Cadastrar procedimento</button>
+      </form>
+      <h3>Profissional</h3>
+      <form id="formProfissional">
+        <label>Nome <input name="nome" required></label>
+        <label>Especialidade <input name="especialidade"></label>
+        <button>Cadastrar profissional</button>
+      </form>
+      <h3>Agendamento</h3>
+      <form id="formAgendamento">
+        <label>Procedimento <select name="codigoProcedimento" id="procedimentoSelect" required></select></label>
+        <label>Profissional <select name="codigoProfissional" id="profissionalSelect" required></select></label>
+        <label>Data <input name="data" type="date" required></label>
+        <label>Status <input name="status" value="Agendado" required></label>
+        <label>Especialidade <input name="especialidade" required></label>
+        <label>Endereço <input name="endereco" required></label>
+        <label>Bairro <input name="bairro" required></label>
+        <label>Cidade <input name="cidade" required></label>
+        <label>CEP <input name="CEP" maxlength="9" required></label>
+        <label>Observação <input name="observacao"></label>
+        <button>Cadastrar agendamento</button>
+      </form>
+      <h3>Entrada na lista de espera</h3>
+      <form id="formEspera">
+        <label>Necessidade <input name="necessidade" required></label>
+        <label>Número de ordem <input name="nroOrdem" type="number" min="1" required></label>
+        <label>Data da solicitação <input name="dataSolicitacao" type="date" required></label>
+        <label>Situação <input name="situacao" value="Aguardando" required></label>
+        <button>Adicionar à lista</button>
+      </form>
+    </section>
+  </main>
+</body>
+</html>
+
+
+
+================================================================================
+ARQUIVO: public\script.js
+================================================================================
+
+// Todas as rotas da API ficam em /api no mesmo servidor.
+const API = "/api";
+let usuario = null;
+
+const $ = (id) => document.getElementById(id);
+const mensagem = (texto) => { $("mensagem").textContent = texto; };
+
+async function requisicao(caminho, metodo = "GET", dados) {
+  const opcoes = { method: metodo, headers: { "Content-Type": "application/json" } };
+  if (dados !== undefined) opcoes.body = JSON.stringify(dados);
+  let resposta;
+  try {
+    resposta = await fetch(API + caminho, opcoes);
+  } catch {
+    throw new Error("Não foi possível conectar à API. Verifique se o servidor está rodando.");
+  }
+  const resultado = await resposta.json().catch(() => ({}));
+  if (!resposta.ok) throw new Error(resultado.mensagem || "Erro HTTP " + resposta.status);
+  return resultado;
+}
+
+function formulario(id) {
+  return Object.fromEntries(new FormData($(id)).entries());
+}
+
+function textoElemento(tag, texto) {
+  const elemento = document.createElement(tag);
+  elemento.textContent = String(texto ?? "-"); // evita inserir HTML vindo da API
+  return elemento;
+}
+
+function mostrarUsuario() {
+  $("acesso").hidden = !!usuario;
+  $("portal").hidden = !usuario;
+  if (usuario) {
+    $("nomeUsuario").textContent = usuario.login;
+    $("codigoUsuario").textContent = usuario.codigo;
+  }
+}
+
+$("formLogin").addEventListener("submit", async (evento) => {
+  evento.preventDefault();
+  try {
+    const resultado = await requisicao("/usuarios/login", "POST", formulario("formLogin"));
+    usuario = resultado.usuario;
+    mostrarUsuario();
+    mensagem(resultado.mensagem);
+    await atualizarTudo();
+  } catch (erro) { mensagem(erro.message); }
+});
+
+$("formCadastro").addEventListener("submit", async (evento) => {
+  evento.preventDefault();
+  try {
+    const resultado = await requisicao("/usuarios", "POST", formulario("formCadastro"));
+    mensagem(resultado.mensagem + " Agora faça login.");
+    $("formCadastro").reset();
+  } catch (erro) { mensagem(erro.message); }
+});
+
+$("sair").addEventListener("click", () => {
+  usuario = null;
+  mostrarUsuario();
+  mensagem("Você saiu do portal.");
+});
+
+function adicionarItem(container, campos) {
+  const div = document.createElement("div");
+  div.className = "item";
+  for (const [rotulo, valor] of Object.entries(campos)) {
+    const linha = document.createElement("p");
+    linha.append(textoElemento("strong", rotulo + ": "), textoElemento("span", valor));
+    div.appendChild(linha);
+  }
+  container.appendChild(div);
+}
+
+async function carregarConsultas() {
+  const [agendamentos, lista] = await Promise.all([
+    requisicao("/agendamentos"), requisicao("/lista-espera")
+  ]);
+  const meusAgendamentos = agendamentos.filter(a => Number(a.paciente?.codigo) === Number(usuario.codigo));
+  const minhaEspera = lista.filter(e => Number(e.paciente?.codigo) === Number(usuario.codigo));
+  $("agendamentos").replaceChildren();
+  $("espera").replaceChildren();
+  if (!meusAgendamentos.length) $("agendamentos").append(textoElemento("p", "Nenhum agendamento encontrado."));
+  if (!minhaEspera.length) $("espera").append(textoElemento("p", "Você não está na lista de espera."));
+  meusAgendamentos.forEach(a => adicionarItem($("agendamentos"), {
+    "Data": String(a.data ?? "-").slice(0, 10).split("-").reverse().join("/"),
+    "Procedimento": a.procedimento?.descricao,
+    "Profissional": a.profissional?.nome,
+    "Status": a.status,
+    "Especialidade": a.especialidade,
+    "Local": [a.endereco, a.bairro, a.cidade, a.CEP].filter(Boolean).join(" - "),
+    "Observação": a.observacao
+  }));
+  minhaEspera.forEach(e => adicionarItem($("espera"), {
+    "Necessidade": e.necessidade,
+    "Posição": e.nroOrdem,
+    "Data da solicitação": String(e.dataSolicitacao ?? "-").slice(0, 10).split("-").reverse().join("/"),
+    "Situação": e.situacao
+  }));
+}
+
+async function carregarOpcoes() {
+  const [procedimentos, profissionais] = await Promise.all([
+    requisicao("/procedimentos"), requisicao("/profissionais")
+  ]);
+  preencherSelect("procedimentoSelect", procedimentos, p => p.descricao);
+  preencherSelect("profissionalSelect", profissionais, p => p.nome + " - " + (p.especialidade || "Sem especialidade"));
+}
+
+function preencherSelect(id, itens, descricao) {
+  const select = $(id);
+  select.replaceChildren(new Option("Selecione", ""));
+  itens.forEach(item => select.add(new Option(descricao(item), String(item.codigo))));
+}
+
+async function atualizarTudo() {
+  try {
+    await Promise.all([carregarConsultas(), carregarOpcoes()]);
+  } catch (erro) { mensagem(erro.message); }
+}
+$("atualizar").addEventListener("click", atualizarTudo);
+
+function configurarCadastro(id, rota, transformar) {
+  $(id).addEventListener("submit", async evento => {
+    evento.preventDefault();
+    try {
+      const dados = transformar ? transformar(formulario(id)) : formulario(id);
+      const resultado = await requisicao(rota, "POST", dados);
+      mensagem(resultado.mensagem || "Cadastro realizado com sucesso!");
+      $(id).reset();
+      await atualizarTudo();
+    } catch (erro) { mensagem(erro.message); }
+  });
+}
+
+configurarCadastro("formProcedimento", "/procedimentos");
+configurarCadastro("formProfissional", "/profissionais");
+configurarCadastro("formAgendamento", "/agendamentos", dados => ({
+  ...dados,
+  codigoPaciente: usuario.codigo,
+  codigoProcedimento: Number(dados.codigoProcedimento),
+  codigoProfissional: Number(dados.codigoProfissional)
+}));
+configurarCadastro("formEspera", "/lista-espera", dados => ({
+  ...dados,
+  codigoPaciente: usuario.codigo,
+  nroOrdem: Number(dados.nroOrdem)
+}));
+
+mostrarUsuario();
+
+
+
+================================================================================
+ARQUIVO: public\style.css
+================================================================================
+
+/* CSS intencionalmente básico para os alunos alterarem */
+body { font-family: Arial, sans-serif; margin: 0; background: #f4f4f4; color: #222; }
+header { background: #167a73; color: white; padding: 16px; }
+main { max-width: 750px; margin: 20px auto; padding: 15px; background: white; }
+h1 { margin: 0; }
+section { margin-bottom: 24px; }
+form { margin-bottom: 20px; }
+label { display: block; margin: 10px 0; }
+input, select { display: block; box-sizing: border-box; padding: 7px; width: 100%; margin-top: 4px; }
+button { padding: 8px 12px; background: #167a73; color: white; border: 0; cursor: pointer; margin: 5px 0; }
+.item { border: 1px solid #ccc; padding: 10px; margin: 10px 0; }
+#mensagem { font-weight: bold; }
+[hidden] { display: none !important; }
+
+
+
+================================================================================
+ARQUIVO: README.md
+================================================================================
+
+
+
+
+================================================================================
+ARQUIVO: src\app.js
+================================================================================
+
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+var express_1 = require("express");
+var path_1 = require("path");
+var routes_1 = require("./routes/routes");
+var app = (0, express_1.default)();
+app.use(express_1.default.json());
+app.use("/api", routes_1.default);
+// Frontend HTML/CSS/JS servido pelo próprio backend.
+app.use(express_1.default.static(path_1.default.join(process.cwd(), "public")));
+exports.default = app;
+
+
+
+================================================================================
+ARQUIVO: src\app.ts
+================================================================================
+
+import express from "express";
+import path from "path";
+import routes from "./routes/routes";
+
+const app = express();
+
+app.use(express.json());
+
+app.use("/api", routes);
+
+// Frontend HTML/CSS/JS servido pelo próprio backend.
+app.use(express.static(path.join(process.cwd(), "public")));
+
+export default app;
+
+
+================================================================================
+ARQUIVO: src\config\dataSource.js
+================================================================================
+
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.AppDataSource = void 0;
+require("dotenv/config");
+require("reflect-metadata");
+var typeorm_1 = require("typeorm");
+var _a = process.env, DB_HOST = _a.DB_HOST, DB_PORT = _a.DB_PORT, DB_USER = _a.DB_USER, DB_PASSWORD = _a.DB_PASSWORD, DB_NAME = _a.DB_NAME;
+exports.AppDataSource = new typeorm_1.DataSource({
+    type: "postgres",
+    host: DB_HOST,
+    port: Number(DB_PORT),
+    username: DB_USER,
+    password: DB_PASSWORD,
+    database: DB_NAME,
+    entities: ["src/models/*.ts"],
+    synchronize: true
+});
+
+
+
+================================================================================
+ARQUIVO: src\config\dataSource.ts
+================================================================================
+
+
+import "dotenv/config";
+import "reflect-metadata";
+import { DataSource } from "typeorm";
+
+const { DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME } = process.env;
+
+export const AppDataSource = new DataSource({
+    type: "postgres",
+    host: DB_HOST,
+    port: Number(DB_PORT),
+    username: DB_USER,
+    password: DB_PASSWORD,
+    database: DB_NAME,
+    entities: ["src/models/*.ts"],
+    synchronize: true
+});
+
+
+
+================================================================================
+ARQUIVO: src\controllers\AgendamentoController.js
+================================================================================
+
+"use strict";
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
+var __generator = (this && this.__generator) || function (thisArg, body) {
+    var _ = { label: 0, sent: function() { if (t[0] & 1) throw t[1]; return t[1]; }, trys: [], ops: [] }, f, y, t, g = Object.create((typeof Iterator === "function" ? Iterator : Object).prototype);
+    return g.next = verb(0), g["throw"] = verb(1), g["return"] = verb(2), typeof Symbol === "function" && (g[Symbol.iterator] = function() { return this; }), g;
+    function verb(n) { return function (v) { return step([n, v]); }; }
+    function step(op) {
+        if (f) throw new TypeError("Generator is already executing.");
+        while (g && (g = 0, op[0] && (_ = 0)), _) try {
+            if (f = 1, y && (t = op[0] & 2 ? y["return"] : op[0] ? y["throw"] || ((t = y["return"]) && t.call(y), 0) : y.next) && !(t = t.call(y, op[1])).done) return t;
+            if (y = 0, t) op = [op[0] & 2, t.value];
+            switch (op[0]) {
+                case 0: case 1: t = op; break;
+                case 4: _.label++; return { value: op[1], done: false };
+                case 5: _.label++; y = op[1]; op = [0]; continue;
+                case 7: op = _.ops.pop(); _.trys.pop(); continue;
+                default:
+                    if (!(t = _.trys, t = t.length > 0 && t[t.length - 1]) && (op[0] === 6 || op[0] === 2)) { _ = 0; continue; }
+                    if (op[0] === 3 && (!t || (op[1] > t[0] && op[1] < t[3]))) { _.label = op[1]; break; }
+                    if (op[0] === 6 && _.label < t[1]) { _.label = t[1]; t = op; break; }
+                    if (t && _.label < t[2]) { _.label = t[2]; _.ops.push(op); break; }
+                    if (t[2]) _.ops.pop();
+                    _.trys.pop(); continue;
+            }
+            op = body.call(thisArg, _);
+        } catch (e) { op = [6, e]; y = 0; } finally { f = t = 0; }
+        if (op[0] & 5) throw op[1]; return { value: op[0] ? op[1] : void 0, done: true };
+    }
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.AgendamentoController = void 0;
+var dataSource_1 = require("../config/dataSource");
+var Agendamento_1 = require("../models/Agendamento");
+var AgendamentoController = /** @class */ (function () {
+    function AgendamentoController() {
+    }
+    AgendamentoController.prototype.cadastrar = function (req, res) {
+        return __awaiter(this, void 0, void 0, function () {
+            var repository, _a, status_1, data, codigoPaciente, codigoProcedimento, codigoProfissional, especialidade, endereco, cidade, bairro, CEP, observacao, agendamento, erro_1;
+            return __generator(this, function (_b) {
+                switch (_b.label) {
+                    case 0:
+                        _b.trys.push([0, 2, , 3]);
+                        repository = dataSource_1.AppDataSource.getRepository(Agendamento_1.Agendamento);
+                        _a = req.body, status_1 = _a.status, data = _a.data, codigoPaciente = _a.codigoPaciente, codigoProcedimento = _a.codigoProcedimento, codigoProfissional = _a.codigoProfissional, especialidade = _a.especialidade, endereco = _a.endereco, cidade = _a.cidade, bairro = _a.bairro, CEP = _a.CEP, observacao = _a.observacao;
+                        agendamento = repository.create({
+                            status: status_1,
+                            data: data,
+                            paciente: { codigo: Number(codigoPaciente) },
+                            procedimento: { codigo: Number(codigoProcedimento) },
+                            profissional: { codigo: Number(codigoProfissional) },
+                            especialidade: especialidade,
+                            endereco: endereco,
+                            cidade: cidade,
+                            bairro: bairro,
+                            CEP: CEP,
+                            observacao: observacao
+                        });
+                        return [4 /*yield*/, repository.save(agendamento)];
+                    case 1:
+                        _b.sent();
+                        return [2 /*return*/, res.status(201).json({
+                                mensagem: "Agendamento realizado!",
+                                agendamento: agendamento
+                            })];
+                    case 2:
+                        erro_1 = _b.sent();
+                        console.error(erro_1);
+                        return [2 /*return*/, res.status(500).json({
+                                mensagem: "Erro ao realizar agendamento."
+                            })];
+                    case 3: return [2 /*return*/];
+                }
+            });
+        });
+    };
+    AgendamentoController.prototype.listar = function (req, res) {
+        return __awaiter(this, void 0, void 0, function () {
+            var repository, agendamentos, erro_2;
+            return __generator(this, function (_a) {
+                switch (_a.label) {
+                    case 0:
+                        _a.trys.push([0, 2, , 3]);
+                        repository = dataSource_1.AppDataSource.getRepository(Agendamento_1.Agendamento);
+                        return [4 /*yield*/, repository.find({
+                                relations: {
+                                    paciente: true,
+                                    procedimento: true,
+                                    profissional: true
+                                }
+                            })];
+                    case 1:
+                        agendamentos = _a.sent();
+                        return [2 /*return*/, res.status(200).json(agendamentos)];
+                    case 2:
+                        erro_2 = _a.sent();
+                        console.error(erro_2);
+                        return [2 /*return*/, res.status(500).json({
+                                mensagem: "Erro ao listar agendamentos."
+                            })];
+                    case 3: return [2 /*return*/];
+                }
+            });
+        });
+    };
+    AgendamentoController.prototype.buscarPorCodigo = function (req, res) {
+        return __awaiter(this, void 0, void 0, function () {
+            var repository, codigo, agendamento, erro_3;
+            return __generator(this, function (_a) {
+                switch (_a.label) {
+                    case 0:
+                        _a.trys.push([0, 2, , 3]);
+                        repository = dataSource_1.AppDataSource.getRepository(Agendamento_1.Agendamento);
+                        codigo = Number(req.params.codigo);
+                        if (!Number.isInteger(codigo) || codigo <= 0) {
+                            return [2 /*return*/, res.status(400).json({
+                                    mensagem: "Código inválido."
+                                })];
+                        }
+                        return [4 /*yield*/, repository.findOne({
+                                where: { codigo: codigo },
+                                relations: {
+                                    paciente: true,
+                                    procedimento: true,
+                                    profissional: true
+                                }
+                            })];
+                    case 1:
+                        agendamento = _a.sent();
+                        if (!agendamento) {
+                            return [2 /*return*/, res.status(404).json({
+                                    mensagem: "Agendamento não encontrado."
+                                })];
+                        }
+                        return [2 /*return*/, res.status(200).json(agendamento)];
+                    case 2:
+                        erro_3 = _a.sent();
+                        console.error(erro_3);
+                        return [2 /*return*/, res.status(500).json({
+                                mensagem: "Erro ao buscar agendamento."
+                            })];
+                    case 3: return [2 /*return*/];
+                }
+            });
+        });
+    };
+    return AgendamentoController;
+}());
+exports.AgendamentoController = AgendamentoController;
+
+
+
+================================================================================
+ARQUIVO: src\controllers\AgendamentoController.ts
+================================================================================
+
+import { Request, Response } from "express";
+import { AppDataSource } from "../config/dataSource";
+import { Agendamento } from "../models/Agendamento";
+
+export class AgendamentoController {
+
+    async cadastrar(req: Request, res: Response) {
+
+        try {
+
+            const repository = AppDataSource.getRepository(Agendamento);
+
+            const {
+                status,
+                data,
+                codigoPaciente,
+                codigoProcedimento,
+                codigoProfissional,
+                especialidade,
+                endereco,
+                cidade,
+                bairro,
+                CEP,
+                observacao
+            } = req.body;
+
+            const agendamento = repository.create({
+                status,
+                data,
+                paciente: { codigo: Number(codigoPaciente) },
+                procedimento: { codigo: Number(codigoProcedimento) },
+                profissional: { codigo: Number(codigoProfissional) },
+                especialidade,
+                endereco,
+                cidade,
+                bairro,
+                CEP,
+                observacao
+            });
+
+            await repository.save(agendamento);
+
+            return res.status(201).json({
+                mensagem: "Agendamento realizado!",
+                agendamento
+            });
+
+        } catch (erro) {
+
+            console.error(erro);
+
+            return res.status(500).json({
+                mensagem: "Erro ao realizar agendamento."
+            });
+        }
+    }
+
+    async listar(req: Request, res: Response) {
+
+        try {
+
+            const repository = AppDataSource.getRepository(Agendamento);
+
+            const agendamentos = await repository.find({
+                relations: {
+                    paciente: true,
+                    procedimento: true,
+                    profissional: true
+                }
+            });
+
+            return res.status(200).json(agendamentos);
+
+        } catch (erro) {
+
+            console.error(erro);
+
+            return res.status(500).json({
+                mensagem: "Erro ao listar agendamentos."
+            });
+        }
+    }
+
+    async buscarPorCodigo(req: Request, res: Response) {
+
+        try {
+
+            const repository = AppDataSource.getRepository(Agendamento);
+
+            const codigo = Number(req.params.codigo);
+
+            if (!Number.isInteger(codigo) || codigo <= 0) {
+                return res.status(400).json({
+                    mensagem: "Código inválido."
+                });
+            }
+
+            const agendamento = await repository.findOne({
+                where: { codigo },
+                relations: {
+                    paciente: true,
+                    procedimento: true,
+                    profissional: true
+                }
+            });
+
+            if (!agendamento) {
+                return res.status(404).json({
+                    mensagem: "Agendamento não encontrado."
+                });
+            }
+
+            return res.status(200).json(agendamento);
+
+        } catch (erro) {
+
+            console.error(erro);
+
+            return res.status(500).json({
+                mensagem: "Erro ao buscar agendamento."
+            });
+        }
+    }
+}
+
+
+================================================================================
+ARQUIVO: src\controllers\ListaEsperaController.js
+================================================================================
+
+"use strict";
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
+var __generator = (this && this.__generator) || function (thisArg, body) {
+    var _ = { label: 0, sent: function() { if (t[0] & 1) throw t[1]; return t[1]; }, trys: [], ops: [] }, f, y, t, g = Object.create((typeof Iterator === "function" ? Iterator : Object).prototype);
+    return g.next = verb(0), g["throw"] = verb(1), g["return"] = verb(2), typeof Symbol === "function" && (g[Symbol.iterator] = function() { return this; }), g;
+    function verb(n) { return function (v) { return step([n, v]); }; }
+    function step(op) {
+        if (f) throw new TypeError("Generator is already executing.");
+        while (g && (g = 0, op[0] && (_ = 0)), _) try {
+            if (f = 1, y && (t = op[0] & 2 ? y["return"] : op[0] ? y["throw"] || ((t = y["return"]) && t.call(y), 0) : y.next) && !(t = t.call(y, op[1])).done) return t;
+            if (y = 0, t) op = [op[0] & 2, t.value];
+            switch (op[0]) {
+                case 0: case 1: t = op; break;
+                case 4: _.label++; return { value: op[1], done: false };
+                case 5: _.label++; y = op[1]; op = [0]; continue;
+                case 7: op = _.ops.pop(); _.trys.pop(); continue;
+                default:
+                    if (!(t = _.trys, t = t.length > 0 && t[t.length - 1]) && (op[0] === 6 || op[0] === 2)) { _ = 0; continue; }
+                    if (op[0] === 3 && (!t || (op[1] > t[0] && op[1] < t[3]))) { _.label = op[1]; break; }
+                    if (op[0] === 6 && _.label < t[1]) { _.label = t[1]; t = op; break; }
+                    if (t && _.label < t[2]) { _.label = t[2]; _.ops.push(op); break; }
+                    if (t[2]) _.ops.pop();
+                    _.trys.pop(); continue;
+            }
+            op = body.call(thisArg, _);
+        } catch (e) { op = [6, e]; y = 0; } finally { f = t = 0; }
+        if (op[0] & 5) throw op[1]; return { value: op[0] ? op[1] : void 0, done: true };
+    }
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.ListaEsperaController = void 0;
+var dataSource_1 = require("../config/dataSource");
+var ListaEspera_1 = require("../models/ListaEspera");
+var ListaEsperaController = /** @class */ (function () {
+    function ListaEsperaController() {
+    }
+    ListaEsperaController.prototype.cadastrar = function (req, res) {
+        return __awaiter(this, void 0, void 0, function () {
+            var repository, _a, codigoPaciente, necessidade, nroOrdem, dataSolicitacao, situacao, solicitacao, erro_1;
+            return __generator(this, function (_b) {
+                switch (_b.label) {
+                    case 0:
+                        _b.trys.push([0, 2, , 3]);
+                        repository = dataSource_1.AppDataSource.getRepository(ListaEspera_1.ListaEspera);
+                        _a = req.body, codigoPaciente = _a.codigoPaciente, necessidade = _a.necessidade, nroOrdem = _a.nroOrdem, dataSolicitacao = _a.dataSolicitacao, situacao = _a.situacao;
+                        solicitacao = repository.create({
+                            paciente: { codigo: Number(codigoPaciente) },
+                            necessidade: necessidade,
+                            nroOrdem: nroOrdem,
+                            dataSolicitacao: dataSolicitacao,
+                            situacao: situacao
+                        });
+                        return [4 /*yield*/, repository.save(solicitacao)];
+                    case 1:
+                        _b.sent();
+                        return [2 /*return*/, res.status(201).json({
+                                mensagem: "Paciente adicionado à lista de espera!",
+                                solicitacao: solicitacao
+                            })];
+                    case 2:
+                        erro_1 = _b.sent();
+                        console.error(erro_1);
+                        return [2 /*return*/, res.status(500).json({
+                                mensagem: "Erro ao cadastrar na lista de espera."
+                            })];
+                    case 3: return [2 /*return*/];
+                }
+            });
+        });
+    };
+    ListaEsperaController.prototype.listar = function (req, res) {
+        return __awaiter(this, void 0, void 0, function () {
+            var repository, lista, erro_2;
+            return __generator(this, function (_a) {
+                switch (_a.label) {
+                    case 0:
+                        _a.trys.push([0, 2, , 3]);
+                        repository = dataSource_1.AppDataSource.getRepository(ListaEspera_1.ListaEspera);
+                        return [4 /*yield*/, repository.find({
+                                relations: {
+                                    paciente: true
+                                },
+                                order: {
+                                    nroOrdem: "ASC"
+                                }
+                            })];
+                    case 1:
+                        lista = _a.sent();
+                        return [2 /*return*/, res.status(200).json(lista)];
+                    case 2:
+                        erro_2 = _a.sent();
+                        console.error(erro_2);
+                        return [2 /*return*/, res.status(500).json({
+                                mensagem: "Erro ao listar fila de espera."
+                            })];
+                    case 3: return [2 /*return*/];
+                }
+            });
+        });
+    };
+    return ListaEsperaController;
+}());
+exports.ListaEsperaController = ListaEsperaController;
+
+
+
+================================================================================
+ARQUIVO: src\controllers\ListaEsperaController.ts
+================================================================================
+
+import { Request, Response } from "express";
+import { AppDataSource } from "../config/dataSource";
+import { ListaEspera } from "../models/ListaEspera";
+
+export class ListaEsperaController {
+
+    async cadastrar(req: Request, res: Response) {
+
+        try {
+
+            const repository = AppDataSource.getRepository(ListaEspera);
+
+            const {
+                codigoPaciente,
+                necessidade,
+                nroOrdem,
+                dataSolicitacao,
+                situacao
+            } = req.body;
+
+            const solicitacao = repository.create({
+                paciente: { codigo: Number(codigoPaciente) },
+                necessidade,
+                nroOrdem,
+                dataSolicitacao,
+                situacao
+            });
+
+            await repository.save(solicitacao);
+
+            return res.status(201).json({
+                mensagem: "Paciente adicionado à lista de espera!",
+                solicitacao
+            });
+
+        } catch (erro) {
+
+            console.error(erro);
+
+            return res.status(500).json({
+                mensagem: "Erro ao cadastrar na lista de espera."
+            });
+        }
+    }
+
+    async listar(req: Request, res: Response) {
+
+        try {
+
+            const repository = AppDataSource.getRepository(ListaEspera);
+
+            const lista = await repository.find({
+                relations: {
+                    paciente: true
+                },
+                order: {
+                    nroOrdem: "ASC"
+                }
+            });
+
+            return res.status(200).json(lista);
+
+        } catch (erro) {
+
+            console.error(erro);
+
+            return res.status(500).json({
+                mensagem: "Erro ao listar fila de espera."
+            });
+        }
+    }
+}
+
+
+================================================================================
+ARQUIVO: src\controllers\ProcedimentoController.js
+================================================================================
+
+"use strict";
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
+var __generator = (this && this.__generator) || function (thisArg, body) {
+    var _ = { label: 0, sent: function() { if (t[0] & 1) throw t[1]; return t[1]; }, trys: [], ops: [] }, f, y, t, g = Object.create((typeof Iterator === "function" ? Iterator : Object).prototype);
+    return g.next = verb(0), g["throw"] = verb(1), g["return"] = verb(2), typeof Symbol === "function" && (g[Symbol.iterator] = function() { return this; }), g;
+    function verb(n) { return function (v) { return step([n, v]); }; }
+    function step(op) {
+        if (f) throw new TypeError("Generator is already executing.");
+        while (g && (g = 0, op[0] && (_ = 0)), _) try {
+            if (f = 1, y && (t = op[0] & 2 ? y["return"] : op[0] ? y["throw"] || ((t = y["return"]) && t.call(y), 0) : y.next) && !(t = t.call(y, op[1])).done) return t;
+            if (y = 0, t) op = [op[0] & 2, t.value];
+            switch (op[0]) {
+                case 0: case 1: t = op; break;
+                case 4: _.label++; return { value: op[1], done: false };
+                case 5: _.label++; y = op[1]; op = [0]; continue;
+                case 7: op = _.ops.pop(); _.trys.pop(); continue;
+                default:
+                    if (!(t = _.trys, t = t.length > 0 && t[t.length - 1]) && (op[0] === 6 || op[0] === 2)) { _ = 0; continue; }
+                    if (op[0] === 3 && (!t || (op[1] > t[0] && op[1] < t[3]))) { _.label = op[1]; break; }
+                    if (op[0] === 6 && _.label < t[1]) { _.label = t[1]; t = op; break; }
+                    if (t && _.label < t[2]) { _.label = t[2]; _.ops.push(op); break; }
+                    if (t[2]) _.ops.pop();
+                    _.trys.pop(); continue;
+            }
+            op = body.call(thisArg, _);
+        } catch (e) { op = [6, e]; y = 0; } finally { f = t = 0; }
+        if (op[0] & 5) throw op[1]; return { value: op[0] ? op[1] : void 0, done: true };
+    }
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.ProcedimentoController = void 0;
+var dataSource_1 = require("../config/dataSource");
+var Procedimento_1 = require("../models/Procedimento");
+var ProcedimentoController = /** @class */ (function () {
+    function ProcedimentoController() {
+    }
+    ProcedimentoController.prototype.cadastrar = function (req, res) {
+        return __awaiter(this, void 0, void 0, function () {
+            var repository, descricao, procedimento, erro_1;
+            return __generator(this, function (_a) {
+                switch (_a.label) {
+                    case 0:
+                        _a.trys.push([0, 2, , 3]);
+                        repository = dataSource_1.AppDataSource.getRepository(Procedimento_1.Procedimento);
+                        descricao = req.body.descricao;
+                        procedimento = repository.create({ descricao: descricao });
+                        return [4 /*yield*/, repository.save(procedimento)];
+                    case 1:
+                        _a.sent();
+                        return [2 /*return*/, res.status(201).json(procedimento)];
+                    case 2:
+                        erro_1 = _a.sent();
+                        console.error(erro_1);
+                        return [2 /*return*/, res.status(500).json({
+                                mensagem: "Erro ao cadastrar procedimento."
+                            })];
+                    case 3: return [2 /*return*/];
+                }
+            });
+        });
+    };
+    ProcedimentoController.prototype.listar = function (req, res) {
+        return __awaiter(this, void 0, void 0, function () {
+            var repository, procedimentos, erro_2;
+            return __generator(this, function (_a) {
+                switch (_a.label) {
+                    case 0:
+                        _a.trys.push([0, 2, , 3]);
+                        repository = dataSource_1.AppDataSource.getRepository(Procedimento_1.Procedimento);
+                        return [4 /*yield*/, repository.find()];
+                    case 1:
+                        procedimentos = _a.sent();
+                        return [2 /*return*/, res.status(200).json(procedimentos)];
+                    case 2:
+                        erro_2 = _a.sent();
+                        console.error(erro_2);
+                        return [2 /*return*/, res.status(500).json({
+                                mensagem: "Erro ao listar procedimentos."
+                            })];
+                    case 3: return [2 /*return*/];
+                }
+            });
+        });
+    };
+    ProcedimentoController.prototype.buscarPorCodigo = function (req, res) {
+        return __awaiter(this, void 0, void 0, function () {
+            var repository, codigo, procedimento, erro_3;
+            return __generator(this, function (_a) {
+                switch (_a.label) {
+                    case 0:
+                        _a.trys.push([0, 2, , 3]);
+                        repository = dataSource_1.AppDataSource.getRepository(Procedimento_1.Procedimento);
+                        codigo = Number(req.params.codigo);
+                        if (!Number.isInteger(codigo) || codigo <= 0) {
+                            return [2 /*return*/, res.status(400).json({
+                                    mensagem: "Código inválido."
+                                })];
+                        }
+                        return [4 /*yield*/, repository.findOneBy({ codigo: codigo })];
+                    case 1:
+                        procedimento = _a.sent();
+                        if (!procedimento) {
+                            return [2 /*return*/, res.status(404).json({
+                                    mensagem: "Procedimento não encontrado."
+                                })];
+                        }
+                        return [2 /*return*/, res.status(200).json(procedimento)];
+                    case 2:
+                        erro_3 = _a.sent();
+                        console.error(erro_3);
+                        return [2 /*return*/, res.status(500).json({
+                                mensagem: "Erro ao buscar procedimento."
+                            })];
+                    case 3: return [2 /*return*/];
+                }
+            });
+        });
+    };
+    return ProcedimentoController;
+}());
+exports.ProcedimentoController = ProcedimentoController;
+
+
+
+================================================================================
+ARQUIVO: src\controllers\ProcedimentoController.ts
+================================================================================
+
+import { Request, Response } from "express";
+import { AppDataSource } from "../config/dataSource";
+import { Procedimento } from "../models/Procedimento";
+
+export class ProcedimentoController {
+
+    async cadastrar(req: Request, res: Response) {
+
+        try {
+
+            const repository = AppDataSource.getRepository(Procedimento);
+
+            const { descricao } = req.body;
+
+            const procedimento = repository.create({ descricao });
+
+            await repository.save(procedimento);
+
+            return res.status(201).json(procedimento);
+
+        } catch (erro) {
+
+            console.error(erro);
+
+            return res.status(500).json({
+                mensagem: "Erro ao cadastrar procedimento."
+            });
+        }
+    }
+
+    async listar(req: Request, res: Response) {
+
+        try {
+
+            const repository = AppDataSource.getRepository(Procedimento);
+
+            const procedimentos = await repository.find();
+
+            return res.status(200).json(procedimentos);
+
+        } catch (erro) {
+
+            console.error(erro);
+
+            return res.status(500).json({
+                mensagem: "Erro ao listar procedimentos."
+            });
+        }
+    }
+
+    async buscarPorCodigo(req: Request, res: Response) {
+
+        try {
+
+            const repository = AppDataSource.getRepository(Procedimento);
+
+            const codigo = Number(req.params.codigo);
+
+            if (!Number.isInteger(codigo) || codigo <= 0) {
+                return res.status(400).json({
+                    mensagem: "Código inválido."
+                });
+            }
+
+            const procedimento = await repository.findOneBy({ codigo });
+
+            if (!procedimento) {
+                return res.status(404).json({
+                    mensagem: "Procedimento não encontrado."
+                });
+            }
+
+            return res.status(200).json(procedimento);
+
+        } catch (erro) {
+
+            console.error(erro);
+
+            return res.status(500).json({
+                mensagem: "Erro ao buscar procedimento."
+            });
+        }
+    }
+}
+
+
+================================================================================
+ARQUIVO: src\controllers\ProfissionalController.js
+================================================================================
+
+"use strict";
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
+var __generator = (this && this.__generator) || function (thisArg, body) {
+    var _ = { label: 0, sent: function() { if (t[0] & 1) throw t[1]; return t[1]; }, trys: [], ops: [] }, f, y, t, g = Object.create((typeof Iterator === "function" ? Iterator : Object).prototype);
+    return g.next = verb(0), g["throw"] = verb(1), g["return"] = verb(2), typeof Symbol === "function" && (g[Symbol.iterator] = function() { return this; }), g;
+    function verb(n) { return function (v) { return step([n, v]); }; }
+    function step(op) {
+        if (f) throw new TypeError("Generator is already executing.");
+        while (g && (g = 0, op[0] && (_ = 0)), _) try {
+            if (f = 1, y && (t = op[0] & 2 ? y["return"] : op[0] ? y["throw"] || ((t = y["return"]) && t.call(y), 0) : y.next) && !(t = t.call(y, op[1])).done) return t;
+            if (y = 0, t) op = [op[0] & 2, t.value];
+            switch (op[0]) {
+                case 0: case 1: t = op; break;
+                case 4: _.label++; return { value: op[1], done: false };
+                case 5: _.label++; y = op[1]; op = [0]; continue;
+                case 7: op = _.ops.pop(); _.trys.pop(); continue;
+                default:
+                    if (!(t = _.trys, t = t.length > 0 && t[t.length - 1]) && (op[0] === 6 || op[0] === 2)) { _ = 0; continue; }
+                    if (op[0] === 3 && (!t || (op[1] > t[0] && op[1] < t[3]))) { _.label = op[1]; break; }
+                    if (op[0] === 6 && _.label < t[1]) { _.label = t[1]; t = op; break; }
+                    if (t && _.label < t[2]) { _.label = t[2]; _.ops.push(op); break; }
+                    if (t[2]) _.ops.pop();
+                    _.trys.pop(); continue;
+            }
+            op = body.call(thisArg, _);
+        } catch (e) { op = [6, e]; y = 0; } finally { f = t = 0; }
+        if (op[0] & 5) throw op[1]; return { value: op[0] ? op[1] : void 0, done: true };
+    }
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.ProfissionalController = void 0;
+var dataSource_1 = require("../config/dataSource");
+var Profissional_1 = require("../models/Profissional");
+var ProfissionalController = /** @class */ (function () {
+    function ProfissionalController() {
+    }
+    ProfissionalController.prototype.cadastrar = function (req, res) {
+        return __awaiter(this, void 0, void 0, function () {
+            var repository, _a, nome, especialidade, profissional, erro_1;
+            return __generator(this, function (_b) {
+                switch (_b.label) {
+                    case 0:
+                        _b.trys.push([0, 2, , 3]);
+                        repository = dataSource_1.AppDataSource.getRepository(Profissional_1.Profissional);
+                        _a = req.body, nome = _a.nome, especialidade = _a.especialidade;
+                        profissional = repository.create({
+                            nome: nome,
+                            especialidade: especialidade
+                        });
+                        return [4 /*yield*/, repository.save(profissional)];
+                    case 1:
+                        _b.sent();
+                        return [2 /*return*/, res.status(201).json(profissional)];
+                    case 2:
+                        erro_1 = _b.sent();
+                        console.error(erro_1);
+                        return [2 /*return*/, res.status(500).json({
+                                mensagem: "Erro ao cadastrar profissional."
+                            })];
+                    case 3: return [2 /*return*/];
+                }
+            });
+        });
+    };
+    ProfissionalController.prototype.listar = function (req, res) {
+        return __awaiter(this, void 0, void 0, function () {
+            var repository, profissionais, erro_2;
+            return __generator(this, function (_a) {
+                switch (_a.label) {
+                    case 0:
+                        _a.trys.push([0, 2, , 3]);
+                        repository = dataSource_1.AppDataSource.getRepository(Profissional_1.Profissional);
+                        return [4 /*yield*/, repository.find()];
+                    case 1:
+                        profissionais = _a.sent();
+                        return [2 /*return*/, res.status(200).json(profissionais)];
+                    case 2:
+                        erro_2 = _a.sent();
+                        console.error(erro_2);
+                        return [2 /*return*/, res.status(500).json({
+                                mensagem: "Erro ao listar profissionais."
+                            })];
+                    case 3: return [2 /*return*/];
+                }
+            });
+        });
+    };
+    ProfissionalController.prototype.buscarPorCodigo = function (req, res) {
+        return __awaiter(this, void 0, void 0, function () {
+            var repository, codigo, profissional, erro_3;
+            return __generator(this, function (_a) {
+                switch (_a.label) {
+                    case 0:
+                        _a.trys.push([0, 2, , 3]);
+                        repository = dataSource_1.AppDataSource.getRepository(Profissional_1.Profissional);
+                        codigo = Number(req.params.codigo);
+                        if (!Number.isInteger(codigo) || codigo <= 0) {
+                            return [2 /*return*/, res.status(400).json({
+                                    mensagem: "Código inválido."
+                                })];
+                        }
+                        return [4 /*yield*/, repository.findOneBy({ codigo: codigo })];
+                    case 1:
+                        profissional = _a.sent();
+                        if (!profissional) {
+                            return [2 /*return*/, res.status(404).json({
+                                    mensagem: "Profissional não encontrado."
+                                })];
+                        }
+                        return [2 /*return*/, res.status(200).json(profissional)];
+                    case 2:
+                        erro_3 = _a.sent();
+                        console.error(erro_3);
+                        return [2 /*return*/, res.status(500).json({
+                                mensagem: "Erro ao buscar profissional."
+                            })];
+                    case 3: return [2 /*return*/];
+                }
+            });
+        });
+    };
+    return ProfissionalController;
+}());
+exports.ProfissionalController = ProfissionalController;
+
+
+
+================================================================================
+ARQUIVO: src\controllers\ProfissionalController.ts
+================================================================================
+
+import { Request, Response } from "express";
+import { AppDataSource } from "../config/dataSource";
+import { Profissional } from "../models/Profissional";
+
+export class ProfissionalController {
+
+    async cadastrar(req: Request, res: Response) {
+
+        try {
+
+            const repository = AppDataSource.getRepository(Profissional);
+
+            const { nome, especialidade } = req.body;
+
+            const profissional = repository.create({
+                nome,
+                especialidade
+            });
+
+            await repository.save(profissional);
+
+            return res.status(201).json(profissional);
+
+        } catch (erro) {
+
+            console.error(erro);
+
+            return res.status(500).json({
+                mensagem: "Erro ao cadastrar profissional."
+            });
+        }
+    }
+
+    async listar(req: Request, res: Response) {
+
+        try {
+
+            const repository = AppDataSource.getRepository(Profissional);
+
+            const profissionais = await repository.find();
+
+            return res.status(200).json(profissionais);
+
+        } catch (erro) {
+
+            console.error(erro);
+
+            return res.status(500).json({
+                mensagem: "Erro ao listar profissionais."
+            });
+        }
+    }
+
+    async buscarPorCodigo(req: Request, res: Response) {
+
+        try {
+
+            const repository = AppDataSource.getRepository(Profissional);
+
+            const codigo = Number(req.params.codigo);
+
+            if (!Number.isInteger(codigo) || codigo <= 0) {
+                return res.status(400).json({
+                    mensagem: "Código inválido."
+                });
+            }
+
+            const profissional = await repository.findOneBy({ codigo });
+
+            if (!profissional) {
+                return res.status(404).json({
+                    mensagem: "Profissional não encontrado."
+                });
+            }
+
+            return res.status(200).json(profissional);
+
+        } catch (erro) {
+
+            console.error(erro);
+
+            return res.status(500).json({
+                mensagem: "Erro ao buscar profissional."
+            });
+        }
+    }
+}
+
+
+================================================================================
+ARQUIVO: src\controllers\UsuarioController.js
+================================================================================
+
+"use strict";
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
+var __generator = (this && this.__generator) || function (thisArg, body) {
+    var _ = { label: 0, sent: function() { if (t[0] & 1) throw t[1]; return t[1]; }, trys: [], ops: [] }, f, y, t, g = Object.create((typeof Iterator === "function" ? Iterator : Object).prototype);
+    return g.next = verb(0), g["throw"] = verb(1), g["return"] = verb(2), typeof Symbol === "function" && (g[Symbol.iterator] = function() { return this; }), g;
+    function verb(n) { return function (v) { return step([n, v]); }; }
+    function step(op) {
+        if (f) throw new TypeError("Generator is already executing.");
+        while (g && (g = 0, op[0] && (_ = 0)), _) try {
+            if (f = 1, y && (t = op[0] & 2 ? y["return"] : op[0] ? y["throw"] || ((t = y["return"]) && t.call(y), 0) : y.next) && !(t = t.call(y, op[1])).done) return t;
+            if (y = 0, t) op = [op[0] & 2, t.value];
+            switch (op[0]) {
+                case 0: case 1: t = op; break;
+                case 4: _.label++; return { value: op[1], done: false };
+                case 5: _.label++; y = op[1]; op = [0]; continue;
+                case 7: op = _.ops.pop(); _.trys.pop(); continue;
+                default:
+                    if (!(t = _.trys, t = t.length > 0 && t[t.length - 1]) && (op[0] === 6 || op[0] === 2)) { _ = 0; continue; }
+                    if (op[0] === 3 && (!t || (op[1] > t[0] && op[1] < t[3]))) { _.label = op[1]; break; }
+                    if (op[0] === 6 && _.label < t[1]) { _.label = t[1]; t = op; break; }
+                    if (t && _.label < t[2]) { _.label = t[2]; _.ops.push(op); break; }
+                    if (t[2]) _.ops.pop();
+                    _.trys.pop(); continue;
+            }
+            op = body.call(thisArg, _);
+        } catch (e) { op = [6, e]; y = 0; } finally { f = t = 0; }
+        if (op[0] & 5) throw op[1]; return { value: op[0] ? op[1] : void 0, done: true };
+    }
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.UsuarioController = void 0;
+var dataSource_1 = require("../config/dataSource");
+var Usuario_1 = require("../models/Usuario");
+var Usuario_2 = require("../models/Usuario");
+var UsuarioController = /** @class */ (function () {
+    function UsuarioController() {
+    }
+    UsuarioController.prototype.cadastrar = function (req, res) {
+        return __awaiter(this, void 0, void 0, function () {
+            var repository, _a, login, senha, existente, usuario, erro_1;
+            return __generator(this, function (_b) {
+                switch (_b.label) {
+                    case 0:
+                        _b.trys.push([0, 3, , 4]);
+                        repository = dataSource_1.AppDataSource.getRepository(Usuario_1.Usuario);
+                        _a = req.body, login = _a.login, senha = _a.senha;
+                        return [4 /*yield*/, repository.findOneBy({ login: login })];
+                    case 1:
+                        existente = _b.sent();
+                        if (existente) {
+                            return [2 /*return*/, res.status(409).json({
+                                    mensagem: "Login já cadastrado!"
+                                })];
+                        }
+                        usuario = repository.create({
+                            login: login,
+                            senha: senha,
+                            situacao: Usuario_2.Situacao.ATIVO
+                        });
+                        return [4 /*yield*/, repository.save(usuario)];
+                    case 2:
+                        _b.sent();
+                        return [2 /*return*/, res.status(201).json({
+                                mensagem: "Usuário cadastrado!",
+                                usuario: {
+                                    codigo: usuario.codigo,
+                                    login: usuario.login,
+                                    situacao: usuario.situacao
+                                }
+                            })];
+                    case 3:
+                        erro_1 = _b.sent();
+                        console.error(erro_1);
+                        return [2 /*return*/, res.status(500).json({
+                                mensagem: "Erro ao cadastrar usuário."
+                            })];
+                    case 4: return [2 /*return*/];
+                }
+            });
+        });
+    };
+    UsuarioController.prototype.listar = function (req, res) {
+        return __awaiter(this, void 0, void 0, function () {
+            var repository, usuarios, erro_2;
+            return __generator(this, function (_a) {
+                switch (_a.label) {
+                    case 0:
+                        _a.trys.push([0, 2, , 3]);
+                        repository = dataSource_1.AppDataSource.getRepository(Usuario_1.Usuario);
+                        return [4 /*yield*/, repository.find({
+                                select: {
+                                    codigo: true,
+                                    login: true,
+                                    situacao: true
+                                }
+                            })];
+                    case 1:
+                        usuarios = _a.sent();
+                        return [2 /*return*/, res.status(200).json(usuarios)];
+                    case 2:
+                        erro_2 = _a.sent();
+                        console.error(erro_2);
+                        return [2 /*return*/, res.status(500).json({
+                                mensagem: "Erro ao listar usuários."
+                            })];
+                    case 3: return [2 /*return*/];
+                }
+            });
+        });
+    };
+    UsuarioController.prototype.buscarPorCodigo = function (req, res) {
+        return __awaiter(this, void 0, void 0, function () {
+            var repository, codigo, usuario, erro_3;
+            return __generator(this, function (_a) {
+                switch (_a.label) {
+                    case 0:
+                        _a.trys.push([0, 2, , 3]);
+                        repository = dataSource_1.AppDataSource.getRepository(Usuario_1.Usuario);
+                        codigo = Number(req.params.codigo);
+                        if (!Number.isInteger(codigo) || codigo <= 0) {
+                            return [2 /*return*/, res.status(400).json({
+                                    mensagem: "Código inválido."
+                                })];
+                        }
+                        return [4 /*yield*/, repository.findOne({
+                                where: { codigo: codigo },
+                                select: {
+                                    codigo: true,
+                                    login: true,
+                                    situacao: true
+                                }
+                            })];
+                    case 1:
+                        usuario = _a.sent();
+                        if (!usuario) {
+                            return [2 /*return*/, res.status(404).json({
+                                    mensagem: "Usuário não encontrado."
+                                })];
+                        }
+                        return [2 /*return*/, res.status(200).json(usuario)];
+                    case 2:
+                        erro_3 = _a.sent();
+                        console.error(erro_3);
+                        return [2 /*return*/, res.status(500).json({
+                                mensagem: "Erro ao buscar usuário."
+                            })];
+                    case 3: return [2 /*return*/];
+                }
+            });
+        });
+    };
+    UsuarioController.prototype.atualizarSituacao = function (req, res) {
+        return __awaiter(this, void 0, void 0, function () {
+            var repository, codigo, situacao, usuario, erro_4;
+            return __generator(this, function (_a) {
+                switch (_a.label) {
+                    case 0:
+                        _a.trys.push([0, 3, , 4]);
+                        repository = dataSource_1.AppDataSource.getRepository(Usuario_1.Usuario);
+                        codigo = Number(req.params.codigo);
+                        situacao = req.body.situacao;
+                        if (!Number.isInteger(codigo) || codigo <= 0) {
+                            return [2 /*return*/, res.status(400).json({
+                                    mensagem: "Código inválido."
+                                })];
+                        }
+                        if (!Object.values(Usuario_2.Situacao).includes(situacao)) {
+                            return [2 /*return*/, res.status(400).json({
+                                    mensagem: "Situação inválida."
+                                })];
+                        }
+                        return [4 /*yield*/, repository.findOneBy({ codigo: codigo })];
+                    case 1:
+                        usuario = _a.sent();
+                        if (!usuario) {
+                            return [2 /*return*/, res.status(404).json({
+                                    mensagem: "Usuário não encontrado."
+                                })];
+                        }
+                        usuario.situacao = situacao;
+                        return [4 /*yield*/, repository.save(usuario)];
+                    case 2:
+                        _a.sent();
+                        return [2 /*return*/, res.status(200).json({
+                                mensagem: "Situação atualizada!",
+                                usuario: {
+                                    codigo: usuario.codigo,
+                                    situacao: usuario.situacao
+                                }
+                            })];
+                    case 3:
+                        erro_4 = _a.sent();
+                        console.error(erro_4);
+                        return [2 /*return*/, res.status(500).json({
+                                mensagem: "Erro ao atualizar situação."
+                            })];
+                    case 4: return [2 /*return*/];
+                }
+            });
+        });
+    };
+    UsuarioController.prototype.login = function (req, res) {
+        return __awaiter(this, void 0, void 0, function () {
+            var repository, _a, login, senha, usuario, erro_5;
+            return __generator(this, function (_b) {
+                switch (_b.label) {
+                    case 0:
+                        _b.trys.push([0, 2, , 3]);
+                        repository = dataSource_1.AppDataSource.getRepository(Usuario_1.Usuario);
+                        _a = req.body, login = _a.login, senha = _a.senha;
+                        return [4 /*yield*/, repository.findOneBy({
+                                login: login,
+                                senha: senha
+                            })];
+                    case 1:
+                        usuario = _b.sent();
+                        if (!usuario || usuario.situacao === Usuario_2.Situacao.INATIVO) {
+                            return [2 /*return*/, res.status(401).json({
+                                    mensagem: "Login ou senha inválidos."
+                                })];
+                        }
+                        return [2 /*return*/, res.status(200).json({
+                                mensagem: "Login realizado!",
+                                usuario: {
+                                    codigo: usuario.codigo,
+                                    login: usuario.login
+                                }
+                            })];
+                    case 2:
+                        erro_5 = _b.sent();
+                        console.error(erro_5);
+                        return [2 /*return*/, res.status(500).json({
+                                mensagem: "Erro ao realizar login."
+                            })];
+                    case 3: return [2 /*return*/];
+                }
+            });
+        });
+    };
+    return UsuarioController;
+}());
+exports.UsuarioController = UsuarioController;
+
+
+
+================================================================================
+ARQUIVO: src\controllers\UsuarioController.ts
+================================================================================
+
+import { Request, Response } from "express";
+import { AppDataSource } from "../config/dataSource";
+import { Usuario } from "../models/Usuario";
+import { Situacao } from "../models/Usuario";
+
+export class UsuarioController {
+
+    async cadastrar(req: Request, res: Response) {
+
+        try {
+
+            const repository = AppDataSource.getRepository(Usuario);
+
+            const { login, senha } = req.body;
+
+            const existente = await repository.findOneBy({ login });
+
+            if (existente) {
+                return res.status(409).json({
+                    mensagem: "Login já cadastrado!"
+                });
+            }
+
+            const usuario = repository.create({
+                login,
+                senha,
+                situacao: Situacao.ATIVO
+            });
+
+            await repository.save(usuario);
+
+            return res.status(201).json({
+                mensagem: "Usuário cadastrado!",
+                usuario: {
+                    codigo: usuario.codigo,
+                    login: usuario.login,
+                    situacao: usuario.situacao
+                }
+            });
+
+        } catch (erro) {
+
+            console.error(erro);
+
+            return res.status(500).json({
+                mensagem: "Erro ao cadastrar usuário."
+            });
+        }
+    }
+
+    async listar(req: Request, res: Response) {
+
+        try {
+
+            const repository = AppDataSource.getRepository(Usuario);
+
+            const usuarios = await repository.find({
+                select: {
+                    codigo: true,
+                    login: true,
+                    situacao: true
+                }
+            });
+
+            return res.status(200).json(usuarios);
+
+        } catch (erro) {
+
+            console.error(erro);
+
+            return res.status(500).json({
+                mensagem: "Erro ao listar usuários."
+            });
+        }
+    }
+
+    async buscarPorCodigo(req: Request, res: Response) {
+
+        try {
+
+            const repository = AppDataSource.getRepository(Usuario);
+
+            const codigo = Number(req.params.codigo);
+
+            if (!Number.isInteger(codigo) || codigo <= 0) {
+                return res.status(400).json({
+                    mensagem: "Código inválido."
+                });
+            }
+
+            const usuario = await repository.findOne({
+                where: { codigo },
+                select: {
+                    codigo: true,
+                    login: true,
+                    situacao: true
+                }
+            });
+
+            if (!usuario) {
+                return res.status(404).json({
+                    mensagem: "Usuário não encontrado."
+                });
+            }
+
+            return res.status(200).json(usuario);
+
+        } catch (erro) {
+
+            console.error(erro);
+
+            return res.status(500).json({
+                mensagem: "Erro ao buscar usuário."
+            });
+        }
+    }
+
+    async atualizarSituacao(req: Request, res: Response) {
+
+        try {
+
+            const repository = AppDataSource.getRepository(Usuario);
+
+            const codigo = Number(req.params.codigo);
+            const { situacao } = req.body;
+
+            if (!Number.isInteger(codigo) || codigo <= 0) {
+                return res.status(400).json({
+                    mensagem: "Código inválido."
+                });
+            }
+
+            if (!Object.values(Situacao).includes(situacao)) {
+                return res.status(400).json({
+                    mensagem: "Situação inválida."
+                });
+            }
+
+            const usuario = await repository.findOneBy({ codigo });
+
+            if (!usuario) {
+                return res.status(404).json({
+                    mensagem: "Usuário não encontrado."
+                });
+            }
+
+            usuario.situacao = situacao;
+
+            await repository.save(usuario);
+
+            return res.status(200).json({
+                mensagem: "Situação atualizada!",
+                usuario: {
+                    codigo: usuario.codigo,
+                    situacao: usuario.situacao
+                }
+            });
+
+        } catch (erro) {
+
+            console.error(erro);
+
+            return res.status(500).json({
+                mensagem: "Erro ao atualizar situação."
+            });
+        }
+    }
+
+    async login(req: Request, res: Response) {
+
+        try {
+
+            const repository = AppDataSource.getRepository(Usuario);
+
+            const { login, senha } = req.body;
+
+            const usuario = await repository.findOneBy({
+                login,
+                senha
+            });
+
+            if (!usuario || usuario.situacao === Situacao.INATIVO) {
+                return res.status(401).json({
+                    mensagem: "Login ou senha inválidos."
+                });
+            }
+
+            return res.status(200).json({
+                mensagem: "Login realizado!",
+                usuario: {
+                    codigo: usuario.codigo,
+                    login: usuario.login
+                }
+            });
+
+        } catch (erro) {
+
+            console.error(erro);
+
+            return res.status(500).json({
+                mensagem: "Erro ao realizar login."
+            });
+        }
+    }
+}
+
+
+================================================================================
+ARQUIVO: src\models\Agendamento.js
+================================================================================
+
+"use strict";
+var __esDecorate = (this && this.__esDecorate) || function (ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
+    function accept(f) { if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected"); return f; }
+    var kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
+    var target = !descriptorIn && ctor ? contextIn["static"] ? ctor : ctor.prototype : null;
+    var descriptor = descriptorIn || (target ? Object.getOwnPropertyDescriptor(target, contextIn.name) : {});
+    var _, done = false;
+    for (var i = decorators.length - 1; i >= 0; i--) {
+        var context = {};
+        for (var p in contextIn) context[p] = p === "access" ? {} : contextIn[p];
+        for (var p in contextIn.access) context.access[p] = contextIn.access[p];
+        context.addInitializer = function (f) { if (done) throw new TypeError("Cannot add initializers after decoration has completed"); extraInitializers.push(accept(f || null)); };
+        var result = (0, decorators[i])(kind === "accessor" ? { get: descriptor.get, set: descriptor.set } : descriptor[key], context);
+        if (kind === "accessor") {
+            if (result === void 0) continue;
+            if (result === null || typeof result !== "object") throw new TypeError("Object expected");
+            if (_ = accept(result.get)) descriptor.get = _;
+            if (_ = accept(result.set)) descriptor.set = _;
+            if (_ = accept(result.init)) initializers.unshift(_);
+        }
+        else if (_ = accept(result)) {
+            if (kind === "field") initializers.unshift(_);
+            else descriptor[key] = _;
+        }
+    }
+    if (target) Object.defineProperty(target, contextIn.name, descriptor);
+    done = true;
+};
+var __runInitializers = (this && this.__runInitializers) || function (thisArg, initializers, value) {
+    var useValue = arguments.length > 2;
+    for (var i = 0; i < initializers.length; i++) {
+        value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);
+    }
+    return useValue ? value : void 0;
+};
+var __setFunctionName = (this && this.__setFunctionName) || function (f, name, prefix) {
+    if (typeof name === "symbol") name = name.description ? "[".concat(name.description, "]") : "";
+    return Object.defineProperty(f, "name", { configurable: true, value: prefix ? "".concat(prefix, " ", name) : name });
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.Agendamento = void 0;
+var typeorm_1 = require("typeorm");
+var Usuario_1 = require("./Usuario");
+var Procedimento_1 = require("./Procedimento");
+var Profissional_1 = require("./Profissional");
+var Agendamento = function () {
+    var _classDecorators = [(0, typeorm_1.Entity)("agendamento")];
+    var _classDescriptor;
+    var _classExtraInitializers = [];
+    var _classThis;
+    var _codigo_decorators;
+    var _codigo_initializers = [];
+    var _codigo_extraInitializers = [];
+    var _status_decorators;
+    var _status_initializers = [];
+    var _status_extraInitializers = [];
+    var _data_decorators;
+    var _data_initializers = [];
+    var _data_extraInitializers = [];
+    var _especialidade_decorators;
+    var _especialidade_initializers = [];
+    var _especialidade_extraInitializers = [];
+    var _endereco_decorators;
+    var _endereco_initializers = [];
+    var _endereco_extraInitializers = [];
+    var _cidade_decorators;
+    var _cidade_initializers = [];
+    var _cidade_extraInitializers = [];
+    var _bairro_decorators;
+    var _bairro_initializers = [];
+    var _bairro_extraInitializers = [];
+    var _CEP_decorators;
+    var _CEP_initializers = [];
+    var _CEP_extraInitializers = [];
+    var _observacao_decorators;
+    var _observacao_initializers = [];
+    var _observacao_extraInitializers = [];
+    var _paciente_decorators;
+    var _paciente_initializers = [];
+    var _paciente_extraInitializers = [];
+    var _procedimento_decorators;
+    var _procedimento_initializers = [];
+    var _procedimento_extraInitializers = [];
+    var _profissional_decorators;
+    var _profissional_initializers = [];
+    var _profissional_extraInitializers = [];
+    var Agendamento = _classThis = /** @class */ (function () {
+        function Agendamento_1() {
+            this.codigo = __runInitializers(this, _codigo_initializers, void 0);
+            this.status = (__runInitializers(this, _codigo_extraInitializers), __runInitializers(this, _status_initializers, void 0));
+            this.data = (__runInitializers(this, _status_extraInitializers), __runInitializers(this, _data_initializers, void 0));
+            this.especialidade = (__runInitializers(this, _data_extraInitializers), __runInitializers(this, _especialidade_initializers, void 0));
+            this.endereco = (__runInitializers(this, _especialidade_extraInitializers), __runInitializers(this, _endereco_initializers, void 0));
+            this.cidade = (__runInitializers(this, _endereco_extraInitializers), __runInitializers(this, _cidade_initializers, void 0));
+            this.bairro = (__runInitializers(this, _cidade_extraInitializers), __runInitializers(this, _bairro_initializers, void 0));
+            this.CEP = (__runInitializers(this, _bairro_extraInitializers), __runInitializers(this, _CEP_initializers, void 0));
+            this.observacao = (__runInitializers(this, _CEP_extraInitializers), __runInitializers(this, _observacao_initializers, void 0));
+            this.paciente = (__runInitializers(this, _observacao_extraInitializers), __runInitializers(this, _paciente_initializers, void 0));
+            this.procedimento = (__runInitializers(this, _paciente_extraInitializers), __runInitializers(this, _procedimento_initializers, void 0));
+            this.profissional = (__runInitializers(this, _procedimento_extraInitializers), __runInitializers(this, _profissional_initializers, void 0));
+            __runInitializers(this, _profissional_extraInitializers);
+        }
+        return Agendamento_1;
+    }());
+    __setFunctionName(_classThis, "Agendamento");
+    (function () {
+        var _metadata = typeof Symbol === "function" && Symbol.metadata ? Object.create(null) : void 0;
+        _codigo_decorators = [(0, typeorm_1.PrimaryGeneratedColumn)()];
+        _status_decorators = [(0, typeorm_1.Column)({ length: 30 })];
+        _data_decorators = [(0, typeorm_1.Column)({ type: "date" })];
+        _especialidade_decorators = [(0, typeorm_1.Column)({ length: 100 })];
+        _endereco_decorators = [(0, typeorm_1.Column)({ length: 200 })];
+        _cidade_decorators = [(0, typeorm_1.Column)({ length: 100 })];
+        _bairro_decorators = [(0, typeorm_1.Column)({ length: 100 })];
+        _CEP_decorators = [(0, typeorm_1.Column)({ length: 9 })];
+        _observacao_decorators = [(0, typeorm_1.Column)({ length: 500, nullable: true })];
+        _paciente_decorators = [(0, typeorm_1.ManyToOne)(function () { return Usuario_1.Usuario; }, function (usuario) { return usuario.agendamentos; }), (0, typeorm_1.JoinColumn)({ name: "codigopaciente" })];
+        _procedimento_decorators = [(0, typeorm_1.ManyToOne)(function () { return Procedimento_1.Procedimento; }, function (procedimento) { return procedimento.agendamentos; }), (0, typeorm_1.JoinColumn)({ name: "codigoprocedimento" })];
+        _profissional_decorators = [(0, typeorm_1.ManyToOne)(function () { return Profissional_1.Profissional; }, function (profissional) { return profissional.agendamentos; }), (0, typeorm_1.JoinColumn)({ name: "codigoprofissional" })];
+        __esDecorate(null, null, _codigo_decorators, { kind: "field", name: "codigo", static: false, private: false, access: { has: function (obj) { return "codigo" in obj; }, get: function (obj) { return obj.codigo; }, set: function (obj, value) { obj.codigo = value; } }, metadata: _metadata }, _codigo_initializers, _codigo_extraInitializers);
+        __esDecorate(null, null, _status_decorators, { kind: "field", name: "status", static: false, private: false, access: { has: function (obj) { return "status" in obj; }, get: function (obj) { return obj.status; }, set: function (obj, value) { obj.status = value; } }, metadata: _metadata }, _status_initializers, _status_extraInitializers);
+        __esDecorate(null, null, _data_decorators, { kind: "field", name: "data", static: false, private: false, access: { has: function (obj) { return "data" in obj; }, get: function (obj) { return obj.data; }, set: function (obj, value) { obj.data = value; } }, metadata: _metadata }, _data_initializers, _data_extraInitializers);
+        __esDecorate(null, null, _especialidade_decorators, { kind: "field", name: "especialidade", static: false, private: false, access: { has: function (obj) { return "especialidade" in obj; }, get: function (obj) { return obj.especialidade; }, set: function (obj, value) { obj.especialidade = value; } }, metadata: _metadata }, _especialidade_initializers, _especialidade_extraInitializers);
+        __esDecorate(null, null, _endereco_decorators, { kind: "field", name: "endereco", static: false, private: false, access: { has: function (obj) { return "endereco" in obj; }, get: function (obj) { return obj.endereco; }, set: function (obj, value) { obj.endereco = value; } }, metadata: _metadata }, _endereco_initializers, _endereco_extraInitializers);
+        __esDecorate(null, null, _cidade_decorators, { kind: "field", name: "cidade", static: false, private: false, access: { has: function (obj) { return "cidade" in obj; }, get: function (obj) { return obj.cidade; }, set: function (obj, value) { obj.cidade = value; } }, metadata: _metadata }, _cidade_initializers, _cidade_extraInitializers);
+        __esDecorate(null, null, _bairro_decorators, { kind: "field", name: "bairro", static: false, private: false, access: { has: function (obj) { return "bairro" in obj; }, get: function (obj) { return obj.bairro; }, set: function (obj, value) { obj.bairro = value; } }, metadata: _metadata }, _bairro_initializers, _bairro_extraInitializers);
+        __esDecorate(null, null, _CEP_decorators, { kind: "field", name: "CEP", static: false, private: false, access: { has: function (obj) { return "CEP" in obj; }, get: function (obj) { return obj.CEP; }, set: function (obj, value) { obj.CEP = value; } }, metadata: _metadata }, _CEP_initializers, _CEP_extraInitializers);
+        __esDecorate(null, null, _observacao_decorators, { kind: "field", name: "observacao", static: false, private: false, access: { has: function (obj) { return "observacao" in obj; }, get: function (obj) { return obj.observacao; }, set: function (obj, value) { obj.observacao = value; } }, metadata: _metadata }, _observacao_initializers, _observacao_extraInitializers);
+        __esDecorate(null, null, _paciente_decorators, { kind: "field", name: "paciente", static: false, private: false, access: { has: function (obj) { return "paciente" in obj; }, get: function (obj) { return obj.paciente; }, set: function (obj, value) { obj.paciente = value; } }, metadata: _metadata }, _paciente_initializers, _paciente_extraInitializers);
+        __esDecorate(null, null, _procedimento_decorators, { kind: "field", name: "procedimento", static: false, private: false, access: { has: function (obj) { return "procedimento" in obj; }, get: function (obj) { return obj.procedimento; }, set: function (obj, value) { obj.procedimento = value; } }, metadata: _metadata }, _procedimento_initializers, _procedimento_extraInitializers);
+        __esDecorate(null, null, _profissional_decorators, { kind: "field", name: "profissional", static: false, private: false, access: { has: function (obj) { return "profissional" in obj; }, get: function (obj) { return obj.profissional; }, set: function (obj, value) { obj.profissional = value; } }, metadata: _metadata }, _profissional_initializers, _profissional_extraInitializers);
+        __esDecorate(null, _classDescriptor = { value: _classThis }, _classDecorators, { kind: "class", name: _classThis.name, metadata: _metadata }, null, _classExtraInitializers);
+        Agendamento = _classThis = _classDescriptor.value;
+        if (_metadata) Object.defineProperty(_classThis, Symbol.metadata, { enumerable: true, configurable: true, writable: true, value: _metadata });
+        __runInitializers(_classThis, _classExtraInitializers);
+    })();
+    return Agendamento = _classThis;
+}();
+exports.Agendamento = Agendamento;
+
+
+
+================================================================================
+ARQUIVO: src\models\Agendamento.ts
+================================================================================
+
+import {
+    Entity,
+    PrimaryGeneratedColumn,
+    Column,
+    ManyToOne,
+    JoinColumn
+} from "typeorm";
+
+import { Usuario } from "./Usuario";
+import { Procedimento } from "./Procedimento";
+import { Profissional } from "./Profissional";
+
+@Entity("agendamento")
+export class Agendamento {
+
+    @PrimaryGeneratedColumn()
+    codigo: number;
+
+    @Column({ length: 30 })
+    status: string;
+
+    @Column({ type: "date" })
+    data: Date;
+
+    @Column({ length: 100 })
+    especialidade: string;
+
+    @Column({ length: 200 })
+    endereco: string;
+
+    @Column({ length: 100 })
+    cidade: string;
+
+    @Column({ length: 100 })
+    bairro: string;
+
+    @Column({ length: 9 })
+    CEP: string;
+
+    @Column({ length: 500, nullable: true })
+    observacao: string;
+
+    @ManyToOne(() => Usuario, usuario => usuario.agendamentos)
+    @JoinColumn({ name: "codigopaciente" })
+    paciente: Usuario;
+
+    @ManyToOne(() => Procedimento, procedimento => procedimento.agendamentos)
+    @JoinColumn({ name: "codigoprocedimento" })
+    procedimento: Procedimento;
+
+    @ManyToOne(() => Profissional, profissional => profissional.agendamentos)
+    @JoinColumn({ name: "codigoprofissional" })
+    profissional: Profissional;
+}
+
+
+================================================================================
+ARQUIVO: src\models\ListaEspera.js
+================================================================================
+
+"use strict";
+var __esDecorate = (this && this.__esDecorate) || function (ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
+    function accept(f) { if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected"); return f; }
+    var kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
+    var target = !descriptorIn && ctor ? contextIn["static"] ? ctor : ctor.prototype : null;
+    var descriptor = descriptorIn || (target ? Object.getOwnPropertyDescriptor(target, contextIn.name) : {});
+    var _, done = false;
+    for (var i = decorators.length - 1; i >= 0; i--) {
+        var context = {};
+        for (var p in contextIn) context[p] = p === "access" ? {} : contextIn[p];
+        for (var p in contextIn.access) context.access[p] = contextIn.access[p];
+        context.addInitializer = function (f) { if (done) throw new TypeError("Cannot add initializers after decoration has completed"); extraInitializers.push(accept(f || null)); };
+        var result = (0, decorators[i])(kind === "accessor" ? { get: descriptor.get, set: descriptor.set } : descriptor[key], context);
+        if (kind === "accessor") {
+            if (result === void 0) continue;
+            if (result === null || typeof result !== "object") throw new TypeError("Object expected");
+            if (_ = accept(result.get)) descriptor.get = _;
+            if (_ = accept(result.set)) descriptor.set = _;
+            if (_ = accept(result.init)) initializers.unshift(_);
+        }
+        else if (_ = accept(result)) {
+            if (kind === "field") initializers.unshift(_);
+            else descriptor[key] = _;
+        }
+    }
+    if (target) Object.defineProperty(target, contextIn.name, descriptor);
+    done = true;
+};
+var __runInitializers = (this && this.__runInitializers) || function (thisArg, initializers, value) {
+    var useValue = arguments.length > 2;
+    for (var i = 0; i < initializers.length; i++) {
+        value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);
+    }
+    return useValue ? value : void 0;
+};
+var __setFunctionName = (this && this.__setFunctionName) || function (f, name, prefix) {
+    if (typeof name === "symbol") name = name.description ? "[".concat(name.description, "]") : "";
+    return Object.defineProperty(f, "name", { configurable: true, value: prefix ? "".concat(prefix, " ", name) : name });
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.ListaEspera = void 0;
+var typeorm_1 = require("typeorm");
+var Usuario_1 = require("./Usuario");
+var ListaEspera = function () {
+    var _classDecorators = [(0, typeorm_1.Entity)("listaespera")];
+    var _classDescriptor;
+    var _classExtraInitializers = [];
+    var _classThis;
+    var _codigo_decorators;
+    var _codigo_initializers = [];
+    var _codigo_extraInitializers = [];
+    var _necessidade_decorators;
+    var _necessidade_initializers = [];
+    var _necessidade_extraInitializers = [];
+    var _nroOrdem_decorators;
+    var _nroOrdem_initializers = [];
+    var _nroOrdem_extraInitializers = [];
+    var _dataSolicitacao_decorators;
+    var _dataSolicitacao_initializers = [];
+    var _dataSolicitacao_extraInitializers = [];
+    var _situacao_decorators;
+    var _situacao_initializers = [];
+    var _situacao_extraInitializers = [];
+    var _paciente_decorators;
+    var _paciente_initializers = [];
+    var _paciente_extraInitializers = [];
+    var ListaEspera = _classThis = /** @class */ (function () {
+        function ListaEspera_1() {
+            this.codigo = __runInitializers(this, _codigo_initializers, void 0);
+            this.necessidade = (__runInitializers(this, _codigo_extraInitializers), __runInitializers(this, _necessidade_initializers, void 0));
+            this.nroOrdem = (__runInitializers(this, _necessidade_extraInitializers), __runInitializers(this, _nroOrdem_initializers, void 0));
+            this.dataSolicitacao = (__runInitializers(this, _nroOrdem_extraInitializers), __runInitializers(this, _dataSolicitacao_initializers, void 0));
+            this.situacao = (__runInitializers(this, _dataSolicitacao_extraInitializers), __runInitializers(this, _situacao_initializers, void 0));
+            this.paciente = (__runInitializers(this, _situacao_extraInitializers), __runInitializers(this, _paciente_initializers, void 0));
+            __runInitializers(this, _paciente_extraInitializers);
+        }
+        return ListaEspera_1;
+    }());
+    __setFunctionName(_classThis, "ListaEspera");
+    (function () {
+        var _metadata = typeof Symbol === "function" && Symbol.metadata ? Object.create(null) : void 0;
+        _codigo_decorators = [(0, typeorm_1.PrimaryGeneratedColumn)()];
+        _necessidade_decorators = [(0, typeorm_1.Column)({ length: 200 })];
+        _nroOrdem_decorators = [(0, typeorm_1.Column)({ type: "int" })];
+        _dataSolicitacao_decorators = [(0, typeorm_1.Column)({ type: "date" })];
+        _situacao_decorators = [(0, typeorm_1.Column)({ length: 30 })];
+        _paciente_decorators = [(0, typeorm_1.ManyToOne)(function () { return Usuario_1.Usuario; }, function (usuario) { return usuario.listaEspera; }), (0, typeorm_1.JoinColumn)({ name: "codigopaciente" })];
+        __esDecorate(null, null, _codigo_decorators, { kind: "field", name: "codigo", static: false, private: false, access: { has: function (obj) { return "codigo" in obj; }, get: function (obj) { return obj.codigo; }, set: function (obj, value) { obj.codigo = value; } }, metadata: _metadata }, _codigo_initializers, _codigo_extraInitializers);
+        __esDecorate(null, null, _necessidade_decorators, { kind: "field", name: "necessidade", static: false, private: false, access: { has: function (obj) { return "necessidade" in obj; }, get: function (obj) { return obj.necessidade; }, set: function (obj, value) { obj.necessidade = value; } }, metadata: _metadata }, _necessidade_initializers, _necessidade_extraInitializers);
+        __esDecorate(null, null, _nroOrdem_decorators, { kind: "field", name: "nroOrdem", static: false, private: false, access: { has: function (obj) { return "nroOrdem" in obj; }, get: function (obj) { return obj.nroOrdem; }, set: function (obj, value) { obj.nroOrdem = value; } }, metadata: _metadata }, _nroOrdem_initializers, _nroOrdem_extraInitializers);
+        __esDecorate(null, null, _dataSolicitacao_decorators, { kind: "field", name: "dataSolicitacao", static: false, private: false, access: { has: function (obj) { return "dataSolicitacao" in obj; }, get: function (obj) { return obj.dataSolicitacao; }, set: function (obj, value) { obj.dataSolicitacao = value; } }, metadata: _metadata }, _dataSolicitacao_initializers, _dataSolicitacao_extraInitializers);
+        __esDecorate(null, null, _situacao_decorators, { kind: "field", name: "situacao", static: false, private: false, access: { has: function (obj) { return "situacao" in obj; }, get: function (obj) { return obj.situacao; }, set: function (obj, value) { obj.situacao = value; } }, metadata: _metadata }, _situacao_initializers, _situacao_extraInitializers);
+        __esDecorate(null, null, _paciente_decorators, { kind: "field", name: "paciente", static: false, private: false, access: { has: function (obj) { return "paciente" in obj; }, get: function (obj) { return obj.paciente; }, set: function (obj, value) { obj.paciente = value; } }, metadata: _metadata }, _paciente_initializers, _paciente_extraInitializers);
+        __esDecorate(null, _classDescriptor = { value: _classThis }, _classDecorators, { kind: "class", name: _classThis.name, metadata: _metadata }, null, _classExtraInitializers);
+        ListaEspera = _classThis = _classDescriptor.value;
+        if (_metadata) Object.defineProperty(_classThis, Symbol.metadata, { enumerable: true, configurable: true, writable: true, value: _metadata });
+        __runInitializers(_classThis, _classExtraInitializers);
+    })();
+    return ListaEspera = _classThis;
+}();
+exports.ListaEspera = ListaEspera;
+
+
+
+================================================================================
+ARQUIVO: src\models\ListaEspera.ts
+================================================================================
+
+import {
+    Entity,
+    PrimaryGeneratedColumn,
+    Column,
+    ManyToOne,
+    JoinColumn
+} from "typeorm";
+
+import { Usuario } from "./Usuario";
+
+@Entity("listaespera")
+export class ListaEspera {
+
+    @PrimaryGeneratedColumn()
+    codigo: number;
+
+    @Column({ length: 200 })
+    necessidade: string;
+
+    @Column({ type: "int" })
+    nroOrdem: number;
+
+    @Column({ type: "date" })
+    dataSolicitacao: Date;
+
+    @Column({ length: 30 })
+    situacao: string;
+
+    @ManyToOne(() => Usuario, usuario => usuario.listaEspera)
+    @JoinColumn({ name: "codigopaciente" })
+    paciente: Usuario;
+}
+
+
+================================================================================
+ARQUIVO: src\models\Procedimento.js
+================================================================================
+
+"use strict";
+var __esDecorate = (this && this.__esDecorate) || function (ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
+    function accept(f) { if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected"); return f; }
+    var kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
+    var target = !descriptorIn && ctor ? contextIn["static"] ? ctor : ctor.prototype : null;
+    var descriptor = descriptorIn || (target ? Object.getOwnPropertyDescriptor(target, contextIn.name) : {});
+    var _, done = false;
+    for (var i = decorators.length - 1; i >= 0; i--) {
+        var context = {};
+        for (var p in contextIn) context[p] = p === "access" ? {} : contextIn[p];
+        for (var p in contextIn.access) context.access[p] = contextIn.access[p];
+        context.addInitializer = function (f) { if (done) throw new TypeError("Cannot add initializers after decoration has completed"); extraInitializers.push(accept(f || null)); };
+        var result = (0, decorators[i])(kind === "accessor" ? { get: descriptor.get, set: descriptor.set } : descriptor[key], context);
+        if (kind === "accessor") {
+            if (result === void 0) continue;
+            if (result === null || typeof result !== "object") throw new TypeError("Object expected");
+            if (_ = accept(result.get)) descriptor.get = _;
+            if (_ = accept(result.set)) descriptor.set = _;
+            if (_ = accept(result.init)) initializers.unshift(_);
+        }
+        else if (_ = accept(result)) {
+            if (kind === "field") initializers.unshift(_);
+            else descriptor[key] = _;
+        }
+    }
+    if (target) Object.defineProperty(target, contextIn.name, descriptor);
+    done = true;
+};
+var __runInitializers = (this && this.__runInitializers) || function (thisArg, initializers, value) {
+    var useValue = arguments.length > 2;
+    for (var i = 0; i < initializers.length; i++) {
+        value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);
+    }
+    return useValue ? value : void 0;
+};
+var __setFunctionName = (this && this.__setFunctionName) || function (f, name, prefix) {
+    if (typeof name === "symbol") name = name.description ? "[".concat(name.description, "]") : "";
+    return Object.defineProperty(f, "name", { configurable: true, value: prefix ? "".concat(prefix, " ", name) : name });
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.Procedimento = void 0;
+var typeorm_1 = require("typeorm");
+var Agendamento_1 = require("./Agendamento");
+var Procedimento = function () {
+    var _classDecorators = [(0, typeorm_1.Entity)("procedimento")];
+    var _classDescriptor;
+    var _classExtraInitializers = [];
+    var _classThis;
+    var _codigo_decorators;
+    var _codigo_initializers = [];
+    var _codigo_extraInitializers = [];
+    var _descricao_decorators;
+    var _descricao_initializers = [];
+    var _descricao_extraInitializers = [];
+    var _agendamentos_decorators;
+    var _agendamentos_initializers = [];
+    var _agendamentos_extraInitializers = [];
+    var Procedimento = _classThis = /** @class */ (function () {
+        function Procedimento_1() {
+            this.codigo = __runInitializers(this, _codigo_initializers, void 0);
+            this.descricao = (__runInitializers(this, _codigo_extraInitializers), __runInitializers(this, _descricao_initializers, void 0));
+            this.agendamentos = (__runInitializers(this, _descricao_extraInitializers), __runInitializers(this, _agendamentos_initializers, void 0));
+            __runInitializers(this, _agendamentos_extraInitializers);
+        }
+        return Procedimento_1;
+    }());
+    __setFunctionName(_classThis, "Procedimento");
+    (function () {
+        var _metadata = typeof Symbol === "function" && Symbol.metadata ? Object.create(null) : void 0;
+        _codigo_decorators = [(0, typeorm_1.PrimaryGeneratedColumn)()];
+        _descricao_decorators = [(0, typeorm_1.Column)({ length: 200 })];
+        _agendamentos_decorators = [(0, typeorm_1.OneToMany)(function () { return Agendamento_1.Agendamento; }, function (agendamento) { return agendamento.procedimento; })];
+        __esDecorate(null, null, _codigo_decorators, { kind: "field", name: "codigo", static: false, private: false, access: { has: function (obj) { return "codigo" in obj; }, get: function (obj) { return obj.codigo; }, set: function (obj, value) { obj.codigo = value; } }, metadata: _metadata }, _codigo_initializers, _codigo_extraInitializers);
+        __esDecorate(null, null, _descricao_decorators, { kind: "field", name: "descricao", static: false, private: false, access: { has: function (obj) { return "descricao" in obj; }, get: function (obj) { return obj.descricao; }, set: function (obj, value) { obj.descricao = value; } }, metadata: _metadata }, _descricao_initializers, _descricao_extraInitializers);
+        __esDecorate(null, null, _agendamentos_decorators, { kind: "field", name: "agendamentos", static: false, private: false, access: { has: function (obj) { return "agendamentos" in obj; }, get: function (obj) { return obj.agendamentos; }, set: function (obj, value) { obj.agendamentos = value; } }, metadata: _metadata }, _agendamentos_initializers, _agendamentos_extraInitializers);
+        __esDecorate(null, _classDescriptor = { value: _classThis }, _classDecorators, { kind: "class", name: _classThis.name, metadata: _metadata }, null, _classExtraInitializers);
+        Procedimento = _classThis = _classDescriptor.value;
+        if (_metadata) Object.defineProperty(_classThis, Symbol.metadata, { enumerable: true, configurable: true, writable: true, value: _metadata });
+        __runInitializers(_classThis, _classExtraInitializers);
+    })();
+    return Procedimento = _classThis;
+}();
+exports.Procedimento = Procedimento;
+
+
+
+================================================================================
+ARQUIVO: src\models\Procedimento.ts
+================================================================================
+
+import {
+    Entity,
+    PrimaryGeneratedColumn,
+    Column,
+    OneToMany
+} from "typeorm";
+
+import { Agendamento } from "./Agendamento";
+
+@Entity("procedimento")
+export class Procedimento {
+
+    @PrimaryGeneratedColumn()
+    codigo: number;
+
+    @Column({ length: 200 })
+    descricao: string;
+
+    @OneToMany(() => Agendamento, agendamento => agendamento.procedimento)
+    agendamentos: Agendamento[];
+}
+
+
+================================================================================
+ARQUIVO: src\models\Profissional.js
+================================================================================
+
+"use strict";
+var __esDecorate = (this && this.__esDecorate) || function (ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
+    function accept(f) { if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected"); return f; }
+    var kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
+    var target = !descriptorIn && ctor ? contextIn["static"] ? ctor : ctor.prototype : null;
+    var descriptor = descriptorIn || (target ? Object.getOwnPropertyDescriptor(target, contextIn.name) : {});
+    var _, done = false;
+    for (var i = decorators.length - 1; i >= 0; i--) {
+        var context = {};
+        for (var p in contextIn) context[p] = p === "access" ? {} : contextIn[p];
+        for (var p in contextIn.access) context.access[p] = contextIn.access[p];
+        context.addInitializer = function (f) { if (done) throw new TypeError("Cannot add initializers after decoration has completed"); extraInitializers.push(accept(f || null)); };
+        var result = (0, decorators[i])(kind === "accessor" ? { get: descriptor.get, set: descriptor.set } : descriptor[key], context);
+        if (kind === "accessor") {
+            if (result === void 0) continue;
+            if (result === null || typeof result !== "object") throw new TypeError("Object expected");
+            if (_ = accept(result.get)) descriptor.get = _;
+            if (_ = accept(result.set)) descriptor.set = _;
+            if (_ = accept(result.init)) initializers.unshift(_);
+        }
+        else if (_ = accept(result)) {
+            if (kind === "field") initializers.unshift(_);
+            else descriptor[key] = _;
+        }
+    }
+    if (target) Object.defineProperty(target, contextIn.name, descriptor);
+    done = true;
+};
+var __runInitializers = (this && this.__runInitializers) || function (thisArg, initializers, value) {
+    var useValue = arguments.length > 2;
+    for (var i = 0; i < initializers.length; i++) {
+        value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);
+    }
+    return useValue ? value : void 0;
+};
+var __setFunctionName = (this && this.__setFunctionName) || function (f, name, prefix) {
+    if (typeof name === "symbol") name = name.description ? "[".concat(name.description, "]") : "";
+    return Object.defineProperty(f, "name", { configurable: true, value: prefix ? "".concat(prefix, " ", name) : name });
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.Profissional = void 0;
+var typeorm_1 = require("typeorm");
+var Agendamento_1 = require("./Agendamento");
+var Profissional = function () {
+    var _classDecorators = [(0, typeorm_1.Entity)("profissional")];
+    var _classDescriptor;
+    var _classExtraInitializers = [];
+    var _classThis;
+    var _codigo_decorators;
+    var _codigo_initializers = [];
+    var _codigo_extraInitializers = [];
+    var _nome_decorators;
+    var _nome_initializers = [];
+    var _nome_extraInitializers = [];
+    var _especialidade_decorators;
+    var _especialidade_initializers = [];
+    var _especialidade_extraInitializers = [];
+    var _agendamentos_decorators;
+    var _agendamentos_initializers = [];
+    var _agendamentos_extraInitializers = [];
+    var Profissional = _classThis = /** @class */ (function () {
+        function Profissional_1() {
+            this.codigo = __runInitializers(this, _codigo_initializers, void 0);
+            this.nome = (__runInitializers(this, _codigo_extraInitializers), __runInitializers(this, _nome_initializers, void 0));
+            this.especialidade = (__runInitializers(this, _nome_extraInitializers), __runInitializers(this, _especialidade_initializers, void 0));
+            this.agendamentos = (__runInitializers(this, _especialidade_extraInitializers), __runInitializers(this, _agendamentos_initializers, void 0));
+            __runInitializers(this, _agendamentos_extraInitializers);
+        }
+        return Profissional_1;
+    }());
+    __setFunctionName(_classThis, "Profissional");
+    (function () {
+        var _metadata = typeof Symbol === "function" && Symbol.metadata ? Object.create(null) : void 0;
+        _codigo_decorators = [(0, typeorm_1.PrimaryGeneratedColumn)()];
+        _nome_decorators = [(0, typeorm_1.Column)({ length: 100 })];
+        _especialidade_decorators = [(0, typeorm_1.Column)({ length: 100, nullable: true })];
+        _agendamentos_decorators = [(0, typeorm_1.OneToMany)(function () { return Agendamento_1.Agendamento; }, function (agendamento) { return agendamento.profissional; })];
+        __esDecorate(null, null, _codigo_decorators, { kind: "field", name: "codigo", static: false, private: false, access: { has: function (obj) { return "codigo" in obj; }, get: function (obj) { return obj.codigo; }, set: function (obj, value) { obj.codigo = value; } }, metadata: _metadata }, _codigo_initializers, _codigo_extraInitializers);
+        __esDecorate(null, null, _nome_decorators, { kind: "field", name: "nome", static: false, private: false, access: { has: function (obj) { return "nome" in obj; }, get: function (obj) { return obj.nome; }, set: function (obj, value) { obj.nome = value; } }, metadata: _metadata }, _nome_initializers, _nome_extraInitializers);
+        __esDecorate(null, null, _especialidade_decorators, { kind: "field", name: "especialidade", static: false, private: false, access: { has: function (obj) { return "especialidade" in obj; }, get: function (obj) { return obj.especialidade; }, set: function (obj, value) { obj.especialidade = value; } }, metadata: _metadata }, _especialidade_initializers, _especialidade_extraInitializers);
+        __esDecorate(null, null, _agendamentos_decorators, { kind: "field", name: "agendamentos", static: false, private: false, access: { has: function (obj) { return "agendamentos" in obj; }, get: function (obj) { return obj.agendamentos; }, set: function (obj, value) { obj.agendamentos = value; } }, metadata: _metadata }, _agendamentos_initializers, _agendamentos_extraInitializers);
+        __esDecorate(null, _classDescriptor = { value: _classThis }, _classDecorators, { kind: "class", name: _classThis.name, metadata: _metadata }, null, _classExtraInitializers);
+        Profissional = _classThis = _classDescriptor.value;
+        if (_metadata) Object.defineProperty(_classThis, Symbol.metadata, { enumerable: true, configurable: true, writable: true, value: _metadata });
+        __runInitializers(_classThis, _classExtraInitializers);
+    })();
+    return Profissional = _classThis;
+}();
+exports.Profissional = Profissional;
+
+
+
+================================================================================
+ARQUIVO: src\models\Profissional.ts
+================================================================================
+
+import {
+    Entity,
+    PrimaryGeneratedColumn,
+    Column,
+    OneToMany
+} from "typeorm";
+
+import { Agendamento } from "./Agendamento";
+
+@Entity("profissional")
+export class Profissional {
+
+    @PrimaryGeneratedColumn()
+    codigo: number;
+
+    @Column({ length: 100 })
+    nome: string;
+
+    @Column({ length: 100, nullable: true })
+    especialidade: string;
+
+    @OneToMany(() => Agendamento, agendamento => agendamento.profissional)
+    agendamentos: Agendamento[];
+}
+
+
+================================================================================
+ARQUIVO: src\models\Usuario.js
+================================================================================
+
+"use strict";
+var __esDecorate = (this && this.__esDecorate) || function (ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
+    function accept(f) { if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected"); return f; }
+    var kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
+    var target = !descriptorIn && ctor ? contextIn["static"] ? ctor : ctor.prototype : null;
+    var descriptor = descriptorIn || (target ? Object.getOwnPropertyDescriptor(target, contextIn.name) : {});
+    var _, done = false;
+    for (var i = decorators.length - 1; i >= 0; i--) {
+        var context = {};
+        for (var p in contextIn) context[p] = p === "access" ? {} : contextIn[p];
+        for (var p in contextIn.access) context.access[p] = contextIn.access[p];
+        context.addInitializer = function (f) { if (done) throw new TypeError("Cannot add initializers after decoration has completed"); extraInitializers.push(accept(f || null)); };
+        var result = (0, decorators[i])(kind === "accessor" ? { get: descriptor.get, set: descriptor.set } : descriptor[key], context);
+        if (kind === "accessor") {
+            if (result === void 0) continue;
+            if (result === null || typeof result !== "object") throw new TypeError("Object expected");
+            if (_ = accept(result.get)) descriptor.get = _;
+            if (_ = accept(result.set)) descriptor.set = _;
+            if (_ = accept(result.init)) initializers.unshift(_);
+        }
+        else if (_ = accept(result)) {
+            if (kind === "field") initializers.unshift(_);
+            else descriptor[key] = _;
+        }
+    }
+    if (target) Object.defineProperty(target, contextIn.name, descriptor);
+    done = true;
+};
+var __runInitializers = (this && this.__runInitializers) || function (thisArg, initializers, value) {
+    var useValue = arguments.length > 2;
+    for (var i = 0; i < initializers.length; i++) {
+        value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);
+    }
+    return useValue ? value : void 0;
+};
+var __setFunctionName = (this && this.__setFunctionName) || function (f, name, prefix) {
+    if (typeof name === "symbol") name = name.description ? "[".concat(name.description, "]") : "";
+    return Object.defineProperty(f, "name", { configurable: true, value: prefix ? "".concat(prefix, " ", name) : name });
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.Usuario = exports.Situacao = void 0;
+var typeorm_1 = require("typeorm");
+var Situacao;
+(function (Situacao) {
+    Situacao["ATIVO"] = "A";
+    Situacao["INATIVO"] = "I";
+})(Situacao || (exports.Situacao = Situacao = {}));
+var Agendamento_1 = require("./Agendamento");
+var ListaEspera_1 = require("./ListaEspera");
+var Usuario = function () {
+    var _classDecorators = [(0, typeorm_1.Entity)("usuario")];
+    var _classDescriptor;
+    var _classExtraInitializers = [];
+    var _classThis;
+    var _codigo_decorators;
+    var _codigo_initializers = [];
+    var _codigo_extraInitializers = [];
+    var _login_decorators;
+    var _login_initializers = [];
+    var _login_extraInitializers = [];
+    var _senha_decorators;
+    var _senha_initializers = [];
+    var _senha_extraInitializers = [];
+    var _situacao_decorators;
+    var _situacao_initializers = [];
+    var _situacao_extraInitializers = [];
+    var _agendamentos_decorators;
+    var _agendamentos_initializers = [];
+    var _agendamentos_extraInitializers = [];
+    var _listaEspera_decorators;
+    var _listaEspera_initializers = [];
+    var _listaEspera_extraInitializers = [];
+    var Usuario = _classThis = /** @class */ (function () {
+        function Usuario_1() {
+            this.codigo = __runInitializers(this, _codigo_initializers, void 0);
+            this.login = (__runInitializers(this, _codigo_extraInitializers), __runInitializers(this, _login_initializers, void 0));
+            this.senha = (__runInitializers(this, _login_extraInitializers), __runInitializers(this, _senha_initializers, void 0));
+            this.situacao = (__runInitializers(this, _senha_extraInitializers), __runInitializers(this, _situacao_initializers, void 0));
+            this.agendamentos = (__runInitializers(this, _situacao_extraInitializers), __runInitializers(this, _agendamentos_initializers, void 0));
+            this.listaEspera = (__runInitializers(this, _agendamentos_extraInitializers), __runInitializers(this, _listaEspera_initializers, void 0));
+            __runInitializers(this, _listaEspera_extraInitializers);
+        }
+        return Usuario_1;
+    }());
+    __setFunctionName(_classThis, "Usuario");
+    (function () {
+        var _metadata = typeof Symbol === "function" && Symbol.metadata ? Object.create(null) : void 0;
+        _codigo_decorators = [(0, typeorm_1.PrimaryGeneratedColumn)()];
+        _login_decorators = [(0, typeorm_1.Column)({ length: 11, unique: true })];
+        _senha_decorators = [(0, typeorm_1.Column)({ length: 255 })];
+        _situacao_decorators = [(0, typeorm_1.Column)({ type: "enum", enum: Situacao, default: Situacao.ATIVO })];
+        _agendamentos_decorators = [(0, typeorm_1.OneToMany)(function () { return Agendamento_1.Agendamento; }, function (agendamento) { return agendamento.paciente; })];
+        _listaEspera_decorators = [(0, typeorm_1.OneToMany)(function () { return ListaEspera_1.ListaEspera; }, function (espera) { return espera.paciente; })];
+        __esDecorate(null, null, _codigo_decorators, { kind: "field", name: "codigo", static: false, private: false, access: { has: function (obj) { return "codigo" in obj; }, get: function (obj) { return obj.codigo; }, set: function (obj, value) { obj.codigo = value; } }, metadata: _metadata }, _codigo_initializers, _codigo_extraInitializers);
+        __esDecorate(null, null, _login_decorators, { kind: "field", name: "login", static: false, private: false, access: { has: function (obj) { return "login" in obj; }, get: function (obj) { return obj.login; }, set: function (obj, value) { obj.login = value; } }, metadata: _metadata }, _login_initializers, _login_extraInitializers);
+        __esDecorate(null, null, _senha_decorators, { kind: "field", name: "senha", static: false, private: false, access: { has: function (obj) { return "senha" in obj; }, get: function (obj) { return obj.senha; }, set: function (obj, value) { obj.senha = value; } }, metadata: _metadata }, _senha_initializers, _senha_extraInitializers);
+        __esDecorate(null, null, _situacao_decorators, { kind: "field", name: "situacao", static: false, private: false, access: { has: function (obj) { return "situacao" in obj; }, get: function (obj) { return obj.situacao; }, set: function (obj, value) { obj.situacao = value; } }, metadata: _metadata }, _situacao_initializers, _situacao_extraInitializers);
+        __esDecorate(null, null, _agendamentos_decorators, { kind: "field", name: "agendamentos", static: false, private: false, access: { has: function (obj) { return "agendamentos" in obj; }, get: function (obj) { return obj.agendamentos; }, set: function (obj, value) { obj.agendamentos = value; } }, metadata: _metadata }, _agendamentos_initializers, _agendamentos_extraInitializers);
+        __esDecorate(null, null, _listaEspera_decorators, { kind: "field", name: "listaEspera", static: false, private: false, access: { has: function (obj) { return "listaEspera" in obj; }, get: function (obj) { return obj.listaEspera; }, set: function (obj, value) { obj.listaEspera = value; } }, metadata: _metadata }, _listaEspera_initializers, _listaEspera_extraInitializers);
+        __esDecorate(null, _classDescriptor = { value: _classThis }, _classDecorators, { kind: "class", name: _classThis.name, metadata: _metadata }, null, _classExtraInitializers);
+        Usuario = _classThis = _classDescriptor.value;
+        if (_metadata) Object.defineProperty(_classThis, Symbol.metadata, { enumerable: true, configurable: true, writable: true, value: _metadata });
+        __runInitializers(_classThis, _classExtraInitializers);
+    })();
+    return Usuario = _classThis;
+}();
+exports.Usuario = Usuario;
+
+
+
+================================================================================
+ARQUIVO: src\models\Usuario.ts
+================================================================================
+
+import {
+    Entity,
+    PrimaryGeneratedColumn,
+    Column,
+    OneToMany
+} from "typeorm";
+
+export enum Situacao {
+    ATIVO = "A",
+    INATIVO = "I"
+}
+
+import { Agendamento } from "./Agendamento";
+import { ListaEspera } from "./ListaEspera";
+
+@Entity("usuario")
+export class Usuario {
+
+    @PrimaryGeneratedColumn()
+    codigo: number;
+
+    @Column({ length: 11, unique: true })
+    login: string;
+
+    @Column({ length: 255 })
+    senha: string;
+
+    @Column({ type: "enum", enum: Situacao, default: Situacao.ATIVO })
+    situacao: string;
+
+    @OneToMany(() => Agendamento, agendamento => agendamento.paciente)
+    agendamentos: Agendamento[];
+
+    @OneToMany(() => ListaEspera, espera => espera.paciente)
+    listaEspera: ListaEspera[];
+}
+
+
+================================================================================
+ARQUIVO: src\routes\routes.js
+================================================================================
+
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+var express_1 = require("express");
+var UsuarioController_1 = require("../controllers/UsuarioController");
+var ProcedimentoController_1 = require("../controllers/ProcedimentoController");
+var ProfissionalController_1 = require("../controllers/ProfissionalController");
+var AgendamentoController_1 = require("../controllers/AgendamentoController");
+var ListaEsperaController_1 = require("../controllers/ListaEsperaController");
+var routes = (0, express_1.Router)();
+var usuarioController = new UsuarioController_1.UsuarioController();
+var procedimentoController = new ProcedimentoController_1.ProcedimentoController();
+var profissionalController = new ProfissionalController_1.ProfissionalController();
+var agendamentoController = new AgendamentoController_1.AgendamentoController();
+var listaEsperaController = new ListaEsperaController_1.ListaEsperaController();
+// USUÁRIO
+routes.post("/usuarios", usuarioController.cadastrar);
+routes.post("/usuarios/login", usuarioController.login);
+routes.get("/usuarios", usuarioController.listar);
+routes.get("/usuarios/:codigo", usuarioController.buscarPorCodigo);
+routes.patch("/usuarios/:codigo/situacao", usuarioController.atualizarSituacao);
+// PROCEDIMENTO
+routes.post("/procedimentos", procedimentoController.cadastrar);
+routes.get("/procedimentos", procedimentoController.listar);
+routes.get("/procedimentos/:codigo", procedimentoController.buscarPorCodigo);
+// PROFISSIONAL
+routes.post("/profissionais", profissionalController.cadastrar);
+routes.get("/profissionais", profissionalController.listar);
+routes.get("/profissionais/:codigo", profissionalController.buscarPorCodigo);
+// AGENDAMENTO
+routes.post("/agendamentos", agendamentoController.cadastrar);
+routes.get("/agendamentos", agendamentoController.listar);
+routes.get("/agendamentos/:codigo", agendamentoController.buscarPorCodigo);
+// LISTA DE ESPERA
+routes.post("/lista-espera", listaEsperaController.cadastrar);
+routes.get("/lista-espera", listaEsperaController.listar);
+exports.default = routes;
+
+
+
+================================================================================
+ARQUIVO: src\routes\routes.ts
+================================================================================
+
+import { Router } from "express";
+
+import { UsuarioController } from "../controllers/UsuarioController";
+import { ProcedimentoController } from "../controllers/ProcedimentoController";
+import { ProfissionalController } from "../controllers/ProfissionalController";
+import { AgendamentoController } from "../controllers/AgendamentoController";
+import { ListaEsperaController } from "../controllers/ListaEsperaController";
+
+const routes = Router();
+
+const usuarioController = new UsuarioController();
+const procedimentoController = new ProcedimentoController();
+const profissionalController = new ProfissionalController();
+const agendamentoController = new AgendamentoController();
+const listaEsperaController = new ListaEsperaController();
+
+// USUÁRIO
+routes.post("/usuarios", usuarioController.cadastrar);
+routes.post("/usuarios/login", usuarioController.login);
+routes.get("/usuarios", usuarioController.listar);
+routes.get("/usuarios/:codigo", usuarioController.buscarPorCodigo);
+routes.patch("/usuarios/:codigo/situacao", usuarioController.atualizarSituacao);
+
+// PROCEDIMENTO
+routes.post("/procedimentos", procedimentoController.cadastrar);
+routes.get("/procedimentos", procedimentoController.listar);
+routes.get("/procedimentos/:codigo", procedimentoController.buscarPorCodigo);
+
+// PROFISSIONAL
+routes.post("/profissionais", profissionalController.cadastrar);
+routes.get("/profissionais", profissionalController.listar);
+routes.get("/profissionais/:codigo", profissionalController.buscarPorCodigo);
+
+// AGENDAMENTO
+routes.post("/agendamentos", agendamentoController.cadastrar);
+routes.get("/agendamentos", agendamentoController.listar);
+routes.get("/agendamentos/:codigo", agendamentoController.buscarPorCodigo);
+
+// LISTA DE ESPERA
+routes.post("/lista-espera", listaEsperaController.cadastrar);
+routes.get("/lista-espera", listaEsperaController.listar);
+
+export default routes;
+
+
+================================================================================
+ARQUIVO: src\server.js
+================================================================================
+
+"use strict";
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
+var __generator = (this && this.__generator) || function (thisArg, body) {
+    var _ = { label: 0, sent: function() { if (t[0] & 1) throw t[1]; return t[1]; }, trys: [], ops: [] }, f, y, t, g = Object.create((typeof Iterator === "function" ? Iterator : Object).prototype);
+    return g.next = verb(0), g["throw"] = verb(1), g["return"] = verb(2), typeof Symbol === "function" && (g[Symbol.iterator] = function() { return this; }), g;
+    function verb(n) { return function (v) { return step([n, v]); }; }
+    function step(op) {
+        if (f) throw new TypeError("Generator is already executing.");
+        while (g && (g = 0, op[0] && (_ = 0)), _) try {
+            if (f = 1, y && (t = op[0] & 2 ? y["return"] : op[0] ? y["throw"] || ((t = y["return"]) && t.call(y), 0) : y.next) && !(t = t.call(y, op[1])).done) return t;
+            if (y = 0, t) op = [op[0] & 2, t.value];
+            switch (op[0]) {
+                case 0: case 1: t = op; break;
+                case 4: _.label++; return { value: op[1], done: false };
+                case 5: _.label++; y = op[1]; op = [0]; continue;
+                case 7: op = _.ops.pop(); _.trys.pop(); continue;
+                default:
+                    if (!(t = _.trys, t = t.length > 0 && t[t.length - 1]) && (op[0] === 6 || op[0] === 2)) { _ = 0; continue; }
+                    if (op[0] === 3 && (!t || (op[1] > t[0] && op[1] < t[3]))) { _.label = op[1]; break; }
+                    if (op[0] === 6 && _.label < t[1]) { _.label = t[1]; t = op; break; }
+                    if (t && _.label < t[2]) { _.label = t[2]; _.ops.push(op); break; }
+                    if (t[2]) _.ops.pop();
+                    _.trys.pop(); continue;
+            }
+            op = body.call(thisArg, _);
+        } catch (e) { op = [6, e]; y = 0; } finally { f = t = 0; }
+        if (op[0] & 5) throw op[1]; return { value: op[0] ? op[1] : void 0, done: true };
+    }
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+require("reflect-metadata");
+var dotenv_1 = require("dotenv");
+var app_1 = require("./app");
+var dataSource_1 = require("./config/dataSource");
+dotenv_1.default.config();
+var PORT = process.env.PORT || 3000;
+function startServer() {
+    return __awaiter(this, void 0, void 0, function () {
+        var erro_1;
+        return __generator(this, function (_a) {
+            switch (_a.label) {
+                case 0:
+                    _a.trys.push([0, 2, , 3]);
+                    return [4 /*yield*/, dataSource_1.AppDataSource.initialize()];
+                case 1:
+                    _a.sent();
+                    console.log("Banco de dados conectado!");
+                    app_1.default.listen(PORT, function () {
+                        console.log("Servidor rodando na porta ".concat(PORT));
+                    });
+                    return [3 /*break*/, 3];
+                case 2:
+                    erro_1 = _a.sent();
+                    console.error("Erro ao iniciar servidor:", erro_1);
+                    process.exit(1);
+                    return [3 /*break*/, 3];
+                case 3: return [2 /*return*/];
+            }
+        });
+    });
+}
+startServer();
+
+
+
+================================================================================
+ARQUIVO: src\server.ts
+================================================================================
+
+import "reflect-metadata";
+import dotenv from "dotenv";
+import app from "./app";
+import { AppDataSource } from "./config/dataSource";
+
+dotenv.config();
+
+const PORT = process.env.PORT || 3000;
+
+async function startServer() {
+
+    try {
+
+        await AppDataSource.initialize();
+
+        console.log("Banco de dados conectado!");
+
+        app.listen(PORT, () => {
+            console.log(`Servidor rodando na porta ${PORT}`);
+        });
+
+    } catch (erro) {
+
+        console.error("Erro ao iniciar servidor:", erro);
+
+        process.exit(1);
+    }
+}
+
+startServer();
+
+
+================================================================================
+ARQUIVO: tsconfig.json
+================================================================================
+
+{
+  "compilerOptions": {
+    "rootDir": "./src",
+    "outDir": "./dist",
+    "module": "nodenext",
+    "target": "esnext",
+    "strict": true,
+    "skipLibCheck": true,
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+    "strictPropertyInitialization": false
+  }
+}
+

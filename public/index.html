@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SaúdeNaMão</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="script.js" defer></script>
+</head>
+<body>
+  <header><h1>SaúdeNaMão</h1><p>Portal simples para consultar informações de saúde</p></header>
+  <main>
+    <p id="mensagem" role="status"></p>
+    <section id="acesso">
+      <h2>Entrar</h2>
+      <form id="formLogin">
+        <label>Login (até 11 caracteres) <input name="login" maxlength="11" required></label>
+        <label>Senha <input name="senha" type="password" required></label>
+        <button>Entrar</button>
+      </form>
+      <h2>Criar conta</h2>
+      <form id="formCadastro">
+        <label>Login <input name="login" maxlength="11" required></label>
+        <label>Senha <input name="senha" type="password" required></label>
+        <button>Cadastrar</button>
+      </form>
+    </section>
+    <section id="portal" hidden>
+      <p>Conectado como <strong id="nomeUsuario"></strong> (código <span id="codigoUsuario"></span>) <button id="sair" type="button">Sair</button></p>
+      <h2>Meus agendamentos</h2>
+      <button id="atualizar" type="button">Atualizar informações</button>
+      <div id="agendamentos"></div>
+      <h2>Minha lista de espera</h2>
+      <div id="espera"></div>
+      <hr>
+      <h2>Cadastros de teste da API</h2>
+      <p>Esses cadastros são apenas para demonstração. A API atual não separa permissões administrativas.</p>
+      <h3>Procedimento</h3>
+      <form id="formProcedimento">
+        <label>Descrição <input name="descricao" required></label>
+        <button>Cadastrar procedimento</button>
+      </form>
+      <h3>Profissional</h3>
+      <form id="formProfissional">
+        <label>Nome <input name="nome" required></label>
+        <label>Especialidade <input name="especialidade"></label>
+        <button>Cadastrar profissional</button>
+      </form>
+      <h3>Agendamento</h3>
+      <form id="formAgendamento">
+        <label>Procedimento <select name="codigoProcedimento" id="procedimentoSelect" required></select></label>
+        <label>Profissional <select name="codigoProfissional" id="profissionalSelect" required></select></label>
+        <label>Data <input name="data" type="date" required></label>
+        <label>Status <input name="status" value="Agendado" required></label>
+        <label>Especialidade <input name="especialidade" required></label>
+        <label>Endereço <input name="endereco" required></label>
+        <label>Bairro <input name="bairro" required></label>
+        <label>Cidade <input name="cidade" required></label>
+        <label>CEP <input name="CEP" maxlength="9" required></label>
+        <label>Observação <input name="observacao"></label>
+        <button>Cadastrar agendamento</button>
+      </form>
+      <h3>Entrada na lista de espera</h3>
+      <form id="formEspera">
+        <label>Necessidade <input name="necessidade" required></label>
+        <label>Número de ordem <input name="nroOrdem" type="number" min="1" required></label>
+        <label>Data da solicitação <input name="dataSolicitacao" type="date" required></label>
+        <label>Situação <input name="situacao" value="Aguardando" required></label>
+        <button>Adicionar à lista</button>
+      </form>
+    </section>
+  </main>
+</body>
+</html>

@@ -3,6 +3,8 @@ import { AppDataSource } from "../config/dataSource";
 import { Usuario } from "../models/Usuario";
 import { Situacao } from "../models/Usuario";
 
+import bcrypt from "bcryptjs";
+
 export class UsuarioController {
 
     async cadastrar(req: Request, res: Response) {
@@ -21,9 +23,11 @@ export class UsuarioController {
                 });
             }
 
+            const senhaHash = await bcrypt.hash(senha, 10);
+
             const usuario = repository.create({
                 login,
-                senha,
+                senha: senhaHash,
                 situacao: Situacao.ATIVO
             });
 
@@ -174,12 +178,20 @@ export class UsuarioController {
 
             const { login, senha } = req.body;
 
-            const usuario = await repository.findOneBy({
-                login,
-                senha
-            });
+            const usuario = await repository.findOneBy({ login });
 
             if (!usuario || usuario.situacao === Situacao.INATIVO) {
+                return res.status(401).json({
+                    mensagem: "Login ou senha inválidos."
+                });
+            }
+
+            const senhaCorreta = await bcrypt.compare(
+                senha,
+                usuario.senha
+            );
+
+            if (!senhaCorreta) {
                 return res.status(401).json({
                     mensagem: "Login ou senha inválidos."
                 });
